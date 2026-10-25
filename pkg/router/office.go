@@ -39,6 +39,7 @@ func Office(r *gin.Engine, ApiVersion string, validator *validator.Validate, db 
 		officeUrl.GET("/rooms/:roomId", officeController.GetRoom)
 		officeUrl.GET("/rooms/:roomId/occupants", officeController.Occupants)
 		officeUrl.POST("/rooms/:roomId/enter", officeController.EnterRoom)
+		officeUrl.POST("/rooms/:roomId/presence", officeController.UpdatePresence)
 		officeUrl.POST("/rooms/:roomId/leave", officeController.LeaveRoom)
 
 		// Layouts

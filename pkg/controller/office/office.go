@@ -712,12 +712,34 @@ func (base *Controller) EnterRoom(c *gin.Context) {
 		return
 	}
 
+	// The room is loaded through the same path GetRoom uses, so a new
+	// occupant appears at the centre of the same geometry every other client
+	// renders instead of at the origin.
+	sets, err := office.AccessSets(requester.OrgID, requester.UserID)
+	if err != nil {
+		base.fail(c, "failed to load access sets", err)
+		return
+	}
+
+	room, err := office.GetRoom(requester.OrgID, requester.UserID, sets, ref)
+	if err != nil {
+		base.fail(c, "failed to load the room", err)
+		return
+	}
+	if room == nil {
+		rd := utility.BuildErrorResponse(http.StatusNotFound, "error", "room not found", nil, nil)
+		c.JSON(http.StatusNotFound, rd)
+		return
+	}
+
 	presence := models.OfficeOccupantResponse{
 		UserID:      requester.UserID,
 		DisplayName: office.DisplayName(requester.OrgID, requester.UserID),
 		Avatar:      avatar,
 		RoomID:      roomID,
 		Status:      "online",
+		Position:    service.RoomCentrePosition(room.Bounds),
+		Rotation:    0,
 		UpdatedAt:   time.Now().UTC(),
 	}
 
@@ -743,6 +765,78 @@ func (base *Controller) EnterRoom(c *gin.Context) {
 	}
 
 	rd := utility.BuildSuccessResponse(http.StatusOK, "room entered", payload)
+	c.JSON(http.StatusOK, rd)
+}
+
+// UpdatePresence records where the requester stands inside a room and
+// announces the movement to the other occupants. It never creates an entry:
+// entering the room is what puts somebody in it.
+func (base *Controller) UpdatePresence(c *gin.Context) {
+	requester, ok := base.authorise(c)
+	if !ok {
+		return
+	}
+
+	office := base.service()
+
+	ref, err := service.ParseRoomID(c.Param("roomId"))
+	if err != nil {
+		rd := utility.BuildErrorResponse(http.StatusBadRequest, "error", "invalid room id", err, nil)
+		c.JSON(http.StatusBadRequest, rd)
+		return
+	}
+
+	access, err := office.CanAccess(requester.OrgID, requester.UserID, ref)
+	if err != nil {
+		base.fail(c, "failed to check room access", err)
+		return
+	}
+	if !access.CanEnter {
+		rd := utility.BuildErrorResponse(http.StatusForbidden, "error", "you cannot enter this room", nil, nil)
+		c.JSON(http.StatusForbidden, rd)
+		return
+	}
+
+	var request models.OfficePresenceUpdateRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		rd := utility.BuildErrorResponse(http.StatusBadRequest, "error", "invalid request body", err, nil)
+		c.JSON(http.StatusBadRequest, rd)
+		return
+	}
+
+	if err := base.Validator.Struct(&request); err != nil {
+		rd := utility.BuildErrorResponse(http.StatusBadRequest, "error", "invalid request body", utility.ValidationResponse(err, base.Validator), nil)
+		c.JSON(http.StatusBadRequest, rd)
+		return
+	}
+
+	err = office.UpdatePresence(models.OfficePresenceUpdateCommand{
+		OrganisationID: requester.OrgID,
+		Room:           ref,
+		UserID:         requester.UserID,
+		Position:       *request.Position,
+		Rotation:       request.Rotation,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrNotInRoom):
+			rd := utility.BuildErrorResponse(http.StatusConflict, "not_in_room", "you are not in this room", nil, nil)
+			c.JSON(http.StatusConflict, rd)
+		case errors.Is(err, service.ErrPositionOutOfBounds):
+			rd := utility.BuildErrorResponse(http.StatusUnprocessableEntity, "position_out_of_bounds", "the position is outside the building", nil, nil)
+			c.JSON(http.StatusUnprocessableEntity, rd)
+		case errors.Is(err, service.ErrTooManyUpdates):
+			rd := utility.BuildErrorResponse(http.StatusTooManyRequests, "too_many_updates", "you are moving too fast", nil, nil)
+			c.JSON(http.StatusTooManyRequests, rd)
+		default:
+			base.fail(c, "failed to update your presence", err)
+		}
+		return
+	}
+
+	rd := utility.BuildSuccessResponse(http.StatusOK, "presence updated", map[string]any{
+		"roomId": service.EncodeRoomID(ref.Kind, ref.Ref),
+	})
 	c.JSON(http.StatusOK, rd)
 }
 
@@ -830,5 +924,3 @@ func (base *Controller) SaveAvatar(c *gin.Context) {
 	rd := utility.BuildSuccessResponse(http.StatusOK, "avatar saved", avatar)
 	c.JSON(http.StatusOK, rd)
 }
-
-
