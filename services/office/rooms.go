@@ -3,6 +3,7 @@ package office
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/hngprojects/telex_be/internal/models"
 	"gorm.io/gorm"
@@ -385,6 +386,12 @@ type channelSummary struct {
 	Joined    bool
 }
 
+// Active channels may have NULL or Go's zero timestamp in the legacy
+// non-nullable Channels.DeletedAt column. A real deletion timestamp stays excluded.
+func activeOfficeChannels(db *gorm.DB) *gorm.DB {
+	return db.Where("channels.deleted_at IS NULL OR channels.deleted_at = ?", time.Time{})
+}
+
 // channelsForUser returns every channel in the organisation, with the
 // requester's membership flag. Public channels are open to the whole org (the
 // same access the 2D chat gives); private channels are doors the requester may
@@ -402,7 +409,7 @@ func (s *Service) channelsForUser(orgID, userID string) ([]channelSummary, error
 		Select("channels.id, channels.name, COALESCE(channels.is_private, false) AS is_private, (user_channels.user_id IS NOT NULL) AS joined").
 		Joins("LEFT JOIN user_channels ON user_channels.channels_id = channels.id AND user_channels.user_id = ?", userID).
 		Where("channels.organisation_id = ?", orgID).
-		Where("channels.deleted_at IS NULL").
+		Scopes(activeOfficeChannels).
 		Order("channels.created_at ASC, channels.id ASC").
 		Scan(&rows).Error
 	if err != nil {

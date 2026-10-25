@@ -263,7 +263,7 @@ func (s *Service) CanAccess(orgID, userID string, ref models.OfficeRoomRef) (Acc
 		var channel models.Channels
 		err = s.Db.Postgresql.Select("id", "is_private").
 			Where("id = ? AND organisation_id = ?", ref.Ref, orgID).
-			Where("channels.deleted_at IS NULL").
+			Scopes(activeOfficeChannels).
 			First(&channel).Error
 		if err != nil && err != gorm.ErrRecordNotFound {
 			return access, err
@@ -383,7 +383,7 @@ func (s *Service) AccessSets(orgID, userID string) (AccessSets, error) {
 		Select("channels.id, COALESCE(channels.is_private, false) AS is_private, (user_channels.user_id IS NOT NULL) AS joined").
 		Joins("LEFT JOIN user_channels ON user_channels.channels_id = channels.id AND user_channels.user_id = ?", userID).
 		Where("channels.organisation_id = ?", orgID).
-		Where("channels.deleted_at IS NULL").
+		Scopes(activeOfficeChannels).
 		Scan(&channelRows).Error; err == nil {
 		for _, row := range channelRows {
 			if row.Joined {
