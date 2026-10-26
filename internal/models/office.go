@@ -355,22 +355,3 @@ type OfficePresenceCommand struct {
 	UserID         string
 	Presence       OfficeOccupantResponse
 }
-
-// OfficePresenceUpdateRequest is the body of
-// POST /office/rooms/{roomId}/presence. A missing position is a malformed
-// body, so it is a pointer and required; the bounds themselves are checked
-// against the building footprint, where 0 is a valid coordinate.
-type OfficePresenceUpdateRequest struct {
-	Position *OfficeVector `json:"position" validate:"required"`
-	Rotation float64       `json:"rotation"`
-}
-
-// OfficePresenceUpdateCommand carries a movement update for a room. An
-// update never creates an occupant; only entering does.
-type OfficePresenceUpdateCommand struct {
-	OrganisationID string
-	Room           OfficeRoomRef
-	UserID         string
-	Position       OfficeVector
-	Rotation       float64
-}
