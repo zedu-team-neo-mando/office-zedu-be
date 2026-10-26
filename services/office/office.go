@@ -265,7 +265,16 @@ func (s *Service) CanAccess(orgID, userID string, ref models.OfficeRoomRef) (Acc
 			Where("id = ? AND organisation_id = ?", ref.Ref, orgID).
 			Scopes(activeOfficeChannels).
 			First(&channel).Error
-		if err != nil && err != gorm.ErrRecordNotFound {
+		switch {
+		case err == gorm.ErrRecordNotFound:
+			// An id with no row in this organisation (unknown, foreign or
+			// soft-deleted) is a locked door, exactly as CanAccessFromSets
+			// treats it; only an administrator may enter a room that cannot
+			// be found.
+			if !isAdmin {
+				return access, nil
+			}
+		case err != nil:
 			return access, err
 		}
 
