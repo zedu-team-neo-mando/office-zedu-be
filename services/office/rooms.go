@@ -564,9 +564,13 @@ func (s *Service) DisplayName(orgID, userID string) string {
 	return ""
 }
 
-// dmOfficeMap maps the id of a direct message to the personal office of the
-// other participant. It is built per requester, so the entries only ever
+// dmOfficeMap maps the id of a 1:1 direct message to the personal office of
+// the other participant. It is built per requester, so the entries only ever
 // point at rooms the requester may visit.
+//
+// Group DMs are deliberately absent: a group has no single other participant,
+// so it has no office to bind to. Binding the requester's own office to the
+// last group DM made opening their own office start a group conversation.
 func (s *Service) dmOfficeMap(orgID, userID string) (map[string]string, error) {
 	officeMap := map[string]string{}
 
@@ -595,25 +599,6 @@ func (s *Service) dmOfficeMap(orgID, userID string) (map[string]string, error) {
 			continue
 		}
 		officeMap[row.ChannelID] = EncodeRoomID(models.OfficeRoomKindPersonal, *row.ParticipantID)
-	}
-
-	// Group direct messages resolve through channel_participants.
-	type participantRow struct {
-		ChannelID string
-		UserID    string
-	}
-
-	var participants []participantRow
-	err = s.Db.Postgresql.Model(&models.ChannelParticipant{}).
-		Select("channel_id, user_id").
-		Where("org_id = ? AND user_id = ?", orgID, userID).
-		Find(&participants).Error
-	if err != nil {
-		return nil, err
-	}
-
-	for _, participant := range participants {
-		officeMap[participant.ChannelID] = EncodeRoomID(models.OfficeRoomKindPersonal, participant.UserID)
 	}
 
 	return officeMap, nil
