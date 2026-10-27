@@ -417,12 +417,16 @@ func (s *Service) AccessSets(orgID, userID string) (AccessSets, error) {
 		}
 	}
 
-	// Group DMs
-	var participantRows []struct{ ChannelID string; UserID string }
+	// Group DMs: the other members of every group the requester belongs to.
+	var groupRows []struct{ UserID string }
 	if err := s.Db.Postgresql.Model(&models.ChannelParticipant{}).
-		Where("org_id = ? AND user_id = ?", orgID, userID).
-		Scan(&participantRows).Error; err == nil {
-		for _, row := range participantRows {
+		Select("DISTINCT user_id").
+		Where("org_id = ? AND user_id <> ?", orgID, userID).
+		Where("channel_id IN (?)", s.Db.Postgresql.Model(&models.ChannelParticipant{}).
+			Select("channel_id").
+			Where("org_id = ? AND user_id = ?", orgID, userID)).
+		Scan(&groupRows).Error; err == nil {
+		for _, row := range groupRows {
 			sets.DMParticipants[row.UserID] = struct{}{}
 		}
 	}
