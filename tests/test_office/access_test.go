@@ -23,6 +23,8 @@ type accessFakeDriver struct {
 	// channelValues are the rows the "FROM channels" lookup returns. Nil
 	// simulates an unknown, foreign or soft-deleted channel id.
 	channelValues [][]driver.Value
+	// participantValues are the other members the group-DM query returns.
+	participantValues [][]driver.Value
 }
 
 type accessFakeConn struct{ driver accessFakeDriver }
@@ -72,6 +74,16 @@ func (s *accessFakeStmt) rowsFor(query string) *accessFakeRows {
 		return &accessFakeRows{columns: []string{"count"}, values: [][]driver.Value{{int64(0)}}}
 	case strings.Contains(query, `FROM "channels"`):
 		return &accessFakeRows{columns: []string{"id", "is_private"}, values: s.driver.channelValues}
+	case strings.Contains(query, `FROM "channel_participants"`):
+		if strings.Contains(query, "user_id <>") {
+			return &accessFakeRows{columns: []string{"user_id"}, values: s.driver.participantValues}
+		}
+		// The old query filtered by user_id = requester, so the only row it
+		// could return is the requester's own membership row.
+		return &accessFakeRows{
+			columns: []string{"channel_id", "user_id"},
+			values:  [][]driver.Value{{"grp-1", "usr-1"}},
+		}
 	default:
 		return &accessFakeRows{values: notFound}
 	}
@@ -174,5 +186,33 @@ func TestCanAccessAllowsOwnOrganisationPublicChannel(t *testing.T) {
 	}
 	if !access.CanEnter {
 		t.Fatal("a public channel of the requester's own organisation must stay enterable")
+	}
+}
+
+// The other members of a group DM are DM participants: their personal offices
+// must be enterable, exactly like a 1:1 DM peer.
+func TestAccessSetsIncludesGroupDMParticipants(t *testing.T) {
+	db := accessTestDB(t, accessFakeDriver{
+		participantValues: [][]driver.Value{{"usr-peer"}},
+	})
+
+	sets, err := accessService(t, db).AccessSets("org-1", "usr-1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, ok := sets.DMParticipants["usr-peer"]; !ok {
+		t.Fatal("a group-DM peer must be in the DM participant set")
+	}
+	if _, ok := sets.DMParticipants["usr-1"]; ok {
+		t.Fatal("the requester must not be added as their own DM participant")
+	}
+
+	access := office.CanAccessFromSets(sets, models.OfficeRoomRef{
+		Kind: models.OfficeRoomKindPersonal,
+		Ref:  "usr-peer",
+	}, "usr-1")
+	if !access.CanEnter {
+		t.Fatal("a group-DM peer's personal office must be enterable")
 	}
 }
