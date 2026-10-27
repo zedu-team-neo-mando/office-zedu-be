@@ -128,3 +128,29 @@ func TestToResponseFillsEmptyItems(t *testing.T) {
 		t.Fatalf("items: got %d, want 0", len(response.Items))
 	}
 }
+
+// The draft and layout endpoints both fall back to this response when nothing
+// has been saved. It must carry the building grid, not the zero value, or the
+// editor receives contradictory defaults depending on which endpoint it calls.
+func TestEmptyLayoutResponseUsesBuildingGrid(t *testing.T) {
+	response := office.EmptyLayoutResponse(models.OfficeRoomRef{
+		Kind: models.OfficeRoomKindChannel,
+		Ref:  "ch_1",
+	})
+
+	if response.RoomID != "channel:ch_1" {
+		t.Fatalf("room id: got %q, want %q", response.RoomID, "channel:ch_1")
+	}
+	if response.Version != 0 || response.Status != "" {
+		t.Fatalf("version/status: got %d/%q, want 0/empty", response.Version, response.Status)
+	}
+	if response.Grid.Width != 56 || response.Grid.Height != 36 || response.Grid.Tile != 1 {
+		t.Fatalf("grid: got %+v, want 56x36 tile 1", response.Grid)
+	}
+	if response.Items == nil {
+		t.Fatal("items should never be nil")
+	}
+	if len(response.Items) != 0 {
+		t.Fatalf("items: got %d, want 0", len(response.Items))
+	}
+}

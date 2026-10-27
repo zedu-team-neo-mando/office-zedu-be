@@ -323,6 +323,19 @@ func (s *Service) replacePublished(command models.OfficeLayoutCommand) (*models.
 	return published, nil
 }
 
+// EmptyLayoutResponse is the layout an editor receives before a room has any
+// saved layout. Both the layout and draft endpoints return it, so the two
+// never disagree about the default grid.
+func EmptyLayoutResponse(ref models.OfficeRoomRef) models.OfficeLayoutResponse {
+	return models.OfficeLayoutResponse{
+		RoomID:  EncodeRoomID(ref.Kind, ref.Ref),
+		Version: 0,
+		Status:  "",
+		Grid:    models.OfficeGrid{Width: int(OfficeBuildingWidth), Height: int(OfficeBuildingHeight), Tile: OfficeTileSize},
+		Items:   []models.OfficeFurnitureItem{},
+	}
+}
+
 // ToResponse converts a stored layout into the API payload.
 func ToResponse(layout *models.OfficeLayout) models.OfficeLayoutResponse {
 	if layout == nil {
