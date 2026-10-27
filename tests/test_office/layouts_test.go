@@ -128,3 +128,20 @@ func TestToResponseFillsEmptyItems(t *testing.T) {
 		t.Fatalf("items: got %d, want 0", len(response.Items))
 	}
 }
+
+// Publishing without a saved draft must fail instead of replacing the live
+// layout with an empty one. The fake database answers every layout lookup with
+// "no row", so a write attempt would surface as the fake driver's Exec error
+// rather than ErrLayoutNotFound.
+func TestPublishWithoutDraftReturnsNotFound(t *testing.T) {
+	db := accessTestDB(t, accessFakeDriver{})
+
+	_, err := accessService(t, db).Publish(models.OfficeLayoutCommand{
+		OrganisationID: "org-1",
+		Room:           models.OfficeRoomRef{Kind: models.OfficeRoomKindChannel, Ref: "ch-1"},
+		ActorID:        "usr-1",
+	})
+	if !errors.Is(err, office.ErrLayoutNotFound) {
+		t.Fatalf("Publish without a draft: got %v, want ErrLayoutNotFound", err)
+	}
+}

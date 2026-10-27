@@ -516,6 +516,11 @@ func (base *Controller) PublishLayout(c *gin.Context) {
 			c.JSON(http.StatusConflict, rd)
 			return
 		}
+		if errors.Is(err, service.ErrLayoutNotFound) {
+			rd := utility.BuildErrorResponse(http.StatusNotFound, "error", "no draft to publish; save a draft first", err, nil)
+			c.JSON(http.StatusNotFound, rd)
+			return
+		}
 		base.fail(c, "failed to publish the layout", err)
 		return
 	}
