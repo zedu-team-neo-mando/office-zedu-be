@@ -2,6 +2,7 @@ package office
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -286,15 +287,18 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 		name = "Lounge"
 	case models.OfficeRoomKindMeeting:
 		name = fmt.Sprintf("Meeting %s", refStr)
+		index = roomIndexFromRef(refStr)
 	case models.OfficeRoomKindFocus:
 		name = fmt.Sprintf("Focus %02s", refStr)
+		index = roomIndexFromRef(refStr)
 	case models.OfficeRoomKindChannel:
 		// Need to get channel name
 		channels, err := s.channelsForUser(orgID, "")
 		if err == nil {
-			for _, ch := range channels {
+			for channelIndex, ch := range channels {
 				if ch.ID == refStr {
 					name = ch.Name
+					index = channelIndex
 					break
 				}
 			}
@@ -306,9 +310,10 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 		// Get member display name
 		members, err := s.organisationMembers(orgID)
 		if err == nil {
-			for _, m := range members {
+			for memberIndex, m := range members {
 				if m.UserID == refStr {
 					name = m.DisplayName
+					index = memberIndex
 					break
 				}
 			}
@@ -361,6 +366,18 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 
 func roomKey(kind, ref string) string {
 	return kind + ":" + ref
+}
+
+// roomIndexFromRef recovers the position BuildDirectory gave a room whose
+// reference is its one-based number ("1" is index 0), so GetRoom feeds
+// defaultBounds the same index the directory does. An unparseable reference
+// falls back to the first room of the kind.
+func roomIndexFromRef(ref string) int {
+	number, err := strconv.Atoi(ref)
+	if err != nil || number < 1 {
+		return 0
+	}
+	return number - 1
 }
 
 // loadRoomConfigs returns the room overrides of an organisation keyed by
