@@ -14,7 +14,7 @@ import (
 // matches the client grid (1 unit = 1 tile).
 const (
 	OfficeBuildingWidth  = 56.0
-	OfficeBuildingHeight = 36.0
+	OfficeBuildingHeight = 40.0
 	OfficeTileSize       = 1.0
 )
 
@@ -34,55 +34,72 @@ type Directory struct {
 	Floors         map[string]int
 }
 
-// defaultBounds returns the derived footprint for a room. Channel and personal
-// rooms are laid out deterministically so every client agrees on the map.
+// defaultBounds keeps the existing room-resolution entry point; index
+// selection remains owned by the GetRoom consistency fix in PR #23.
 func defaultBounds(kind, ref string, index int) models.OfficeBounds {
+	return DefaultRoomBounds(kind, ref, index)
+}
+
+// DefaultRoomBounds returns the derived footprint for a room. Channel and personal
+// rooms are laid out deterministically so every client agrees on the map.
+func DefaultRoomBounds(kind, ref string, index int) models.OfficeBounds {
 	switch kind {
 	case models.OfficeRoomKindLobby:
 		return models.OfficeBounds{X: 1, Y: 1, W: 8, H: 6}
 	case models.OfficeRoomKindReception:
-		return models.OfficeBounds{X: 9, Y: 1, W: 8, H: 6}
+		// Leave a full two-tile corridor to Meeting 1 without moving it.
+		return models.OfficeBounds{X: 9, Y: 1, W: 7, H: 6}
 	case models.OfficeRoomKindLounge:
 		// One corridor below the lobby/reception pair, so both doors open into
 		// walkable floor instead of sharing an edge.
 		return models.OfficeBounds{X: 1, Y: 8.6, W: 8, H: 6}
 	case models.OfficeRoomKindMeeting:
-		return models.OfficeBounds{X: 18 + float64(index)*7, Y: 1, W: 6, H: 6}
+		// Keep Meeting 2's origin fixed; enlarge both rooms into a shared wall.
+		return models.OfficeBounds{X: 18 + float64(index)*7, Y: 1, W: 7, H: 6}
 	case models.OfficeRoomKindFocus:
-		return models.OfficeBounds{X: 18 + float64(index%2)*5, Y: 8 + float64(index/2)*5, W: 4, H: 4}
+		// Aligned pairs with a two-tile centre corridor and cross-corridor.
+		return models.OfficeBounds{X: 18 + float64(index%2)*6, Y: 9 + float64(index/2)*6, W: 4, H: 4}
 	case models.OfficeRoomKindChannel:
-		// Channel rooms sit in rows below the shared rooms: seven 7.3-wide
-		// rooms fit the 56-wide building, and the 1.6 corridor between rows
-		// keeps every doorway reachable. Two rows (14 channels) fit inside a
-		// 36-deep footprint.
-		row := index / 7
-		col := index % 7
-		return models.OfficeBounds{
-			X: 0.8 + float64(col)*7.9,
-			Y: 19 + float64(row)*9,
-			W: 7.3,
-			H: 7.4,
+		// Three joined rooms and four joined rooms share an internal spine.
+		row, col := index/7, index%7
+		x := 0.8 + float64(col)*7.3
+		if col >= 3 {
+			x += 2
 		}
+		return models.OfficeBounds{X: x, Y: 22 + float64(row)*9.4, W: 7.3, H: 7.4}
 	case models.OfficeRoomKindPersonal:
-		// Ten full offices per row, four rows per member floor. A 5 by 5.4
-		// room is an office somebody can furnish, not a cubicle; the 1.6
-		// corridor between rows is where every door opens.
+		// Two five-office blocks per row, with a two-tile central corridor.
+		// Two-tile cross-corridors keep every south-facing door reachable.
 		slot := index % models.OfficeFloorCapacity
-		tier := slot / 10
-		column := slot % 10
-		return models.OfficeBounds{
-			X: 1.2 + float64(column)*5.4,
-			Y: 1 + float64(tier)*7,
-			W: 5,
-			H: 5.4,
+		tier, column := slot/10, slot%10
+		x := 1.2 + float64(column)*5
+		if column >= 5 {
+			x += 2
 		}
+		return models.OfficeBounds{X: x, Y: 1 + float64(tier)*7.4, W: 5, H: 5.4}
 	case models.OfficeRoomKindArea:
-		// The three extras share a strip below the offices, so a member never
-		// has to walk to another storey to find them.
-		return models.OfficeBounds{X: 2 + float64(index)*18, Y: 28.6, W: 16, H: 6.4}
+		// Keep the existing two-tile passages between the shared areas.
+		return models.OfficeBounds{X: 1.2 + float64(index)*18, Y: 30.6, W: 16, H: 6.4}
 	default:
 		return models.OfficeBounds{X: 0, Y: 0, W: 4, H: 4}
 	}
+}
+
+// ChannelRoomBounds spreads the three-room row across the shared frontage.
+// Other channel counts retain their existing block layout.
+func ChannelRoomBounds(index, count int) models.OfficeBounds {
+	bounds := DefaultRoomBounds(models.OfficeRoomKindChannel, "", index)
+	if count != 3 || index < 0 || index >= count {
+		return bounds
+	}
+	left := DefaultRoomBounds(models.OfficeRoomKindChannel, "", 0).X
+	// Preserve the previously agreed three-room frontage while resizing
+	// the meeting pair independently.
+	const right = 31.0
+	width := (right - left - 4) / 3
+	bounds.X = left + float64(index)*(width+2)
+	bounds.W = width
+	return bounds
 }
 
 func defaultCapacity(kind string) int {
@@ -131,8 +148,12 @@ func (s *Service) BuildDirectory(orgID, userID string, sets AccessSets) (*Direct
 	}
 	directory.Floors = floors
 
+	channelCount := 0
 	appendRoom := func(kind, ref, name string, index int, locked bool) {
 		bounds := defaultBounds(kind, ref, index)
+		if kind == models.OfficeRoomKindChannel {
+			bounds = ChannelRoomBounds(index, channelCount)
+		}
 		capacity := defaultCapacity(kind)
 		enabled := true
 
@@ -179,6 +200,7 @@ func (s *Service) BuildDirectory(orgID, userID string, sets AccessSets) (*Direct
 	if err != nil {
 		return nil, err
 	}
+	channelCount = len(channels)
 	for index, channel := range channels {
 		roomID := EncodeRoomID(models.OfficeRoomKindChannel, channel.ID)
 		directory.ChannelRoomMap[channel.ID] = roomID
@@ -276,6 +298,7 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 	refStr := ref.Ref
 	name := ""
 	index := 0
+	channelCount := 0
 	locked := false
 
 	switch kind {
@@ -295,6 +318,7 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 		// Need to get channel name
 		channels, err := s.channelsForUser(orgID, "")
 		if err == nil {
+			channelCount = len(channels)
 			for channelIndex, ch := range channels {
 				if ch.ID == refStr {
 					name = ch.Name
@@ -330,6 +354,9 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 	}
 
 	bounds := defaultBounds(kind, refStr, index)
+	if kind == models.OfficeRoomKindChannel {
+		bounds = ChannelRoomBounds(index, channelCount)
+	}
 	capacity := defaultCapacity(kind)
 	enabled := true
 
