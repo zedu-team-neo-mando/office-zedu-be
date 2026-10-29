@@ -356,11 +356,16 @@ type OfficePresenceCommand struct {
 	Presence       OfficeOccupantResponse
 }
 
+type OfficeRoomEnterRequest struct {
+	Status string `json:"status" validate:"omitempty,oneof=online idle away call dnd"`
+}
+
 // OfficePresenceUpdateRequest is the body of
 // POST /office/rooms/{roomId}/presence. A missing position is a malformed
 // body, so it is a pointer and required; the bounds themselves are checked
 // against the building footprint, where 0 is a valid coordinate.
 type OfficePresenceUpdateRequest struct {
+	Status   string        `json:"status" validate:"omitempty,oneof=online idle away call dnd"`
 	Position *OfficeVector `json:"position" validate:"required"`
 	Rotation float64       `json:"rotation"`
 }
@@ -368,6 +373,7 @@ type OfficePresenceUpdateRequest struct {
 // OfficePresenceUpdateCommand carries a movement update for a room. An
 // update never creates an occupant; only entering does.
 type OfficePresenceUpdateCommand struct {
+	Status         string
 	OrganisationID string
 	Room           OfficeRoomRef
 	UserID         string
