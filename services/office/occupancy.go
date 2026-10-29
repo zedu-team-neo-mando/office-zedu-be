@@ -144,6 +144,9 @@ func (s *Service) UpdatePresence(command models.OfficePresenceUpdateCommand) err
 		return err
 	}
 
+	if command.Status != "" {
+		current.Status = command.Status
+	}
 	current.Position = command.Position
 	current.Rotation = command.Rotation
 	current.UpdatedAt = time.Now().UTC()
