@@ -27,18 +27,21 @@ const (
 )
 
 type OrgUserManagement struct {
-	UserID         string                 `gorm:"type:uuid;primaryKey;not null" json:"user_id"`
-	OrganisationID string                 `gorm:"type:uuid;primaryKey;not null" json:"organisation_id"`
-	Status         string                 `gorm:"type:varchar(255)" json:"status"`
-	RoleID         string                 `gorm:"type:uuid;null" json:"role_id"`
+	UserID         string `gorm:"type:uuid;primaryKey;not null" json:"user_id"`
+	OrganisationID string `gorm:"type:uuid;primaryKey;not null" json:"organisation_id"`
+	Status         string `gorm:"type:varchar(255)" json:"status"`
+	RoleID         string `gorm:"type:uuid;null" json:"role_id"`
 	// FloorIndex is the member floor this person's office sits on. It is
 	// empty until the tower assigns one; the general floor is never stored
 	// here because it is derived from the org's channels.
-	FloorIndex     *int                   `gorm:"column:floor_index;type:int;null" json:"floor_index,omitempty"`
-	IsDeactivated  bool                   `gorm:"column:is_deactivated;type:bool;default:false" json:"is_deactivated"`
-	CreatedAt      time.Time              `gorm:"column:created_at;not null;autoCreateTime" json:"created_at"`
-	DeletedAt      time.Time              `gorm:"index" json:"deleted_at"`
-	Preferences    NotificationPreference `gorm:"type:jsonb;not null;default:'{}'" json:"preferences"`
+	FloorIndex *int `gorm:"column:floor_index;type:int;null" json:"floor_index,omitempty"`
+	// FloorSlot is the desk this person's office occupies on FloorIndex. It is
+	// stored so an office stays put when a colleague ahead of them leaves.
+	FloorSlot     *int                   `gorm:"column:floor_slot;type:int;null" json:"floor_slot,omitempty"`
+	IsDeactivated bool                   `gorm:"column:is_deactivated;type:bool;default:false" json:"is_deactivated"`
+	CreatedAt     time.Time              `gorm:"column:created_at;not null;autoCreateTime" json:"created_at"`
+	DeletedAt     time.Time              `gorm:"index" json:"deleted_at"`
+	Preferences   NotificationPreference `gorm:"type:jsonb;not null;default:'{}'" json:"preferences"`
 }
 
 type OrgUserCreateRequest struct {

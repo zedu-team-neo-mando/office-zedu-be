@@ -28,11 +28,30 @@ type FloorSlot struct {
 	Slot       int
 }
 
-// AssignFloorSlots places members top-down: the earliest joiners take the top
-// member floor, and the floor below starts once the one above holds
-// FloorCapacity offices. Equal join times are broken by user id so every client
-// derives the same tower.
-func AssignFloorSlots(members []FloorMember) []FloorSlot {
+// FloorDesk is the desk the tower has stored for a member. Either half can be
+// unknown (-1): a row written before desks were stored knows its floor only.
+type FloorDesk struct {
+	FloorIndex int
+	Slot       int
+}
+
+// FloorAssignments is the tower as a bootstrap derives it: which floor and
+// which desk every active member holds.
+type FloorAssignments struct {
+	Floors map[string]int
+	Slots  map[string]int
+}
+
+// UnknownFloor and UnknownSlot stand in for the half of a desk the database
+// does not know yet.
+const (
+	UnknownFloor = -1
+	UnknownSlot  = -1
+)
+
+// byJoinOrder copies the members and orders them the way the tower fills up:
+// earliest joiner first, ties broken by user id so every client agrees.
+func byJoinOrder(members []FloorMember) []FloorMember {
 	ordered := make([]FloorMember, len(members))
 	copy(ordered, members)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -41,6 +60,17 @@ func AssignFloorSlots(members []FloorMember) []FloorSlot {
 		}
 		return ordered[i].JoinedAt.Before(ordered[j].JoinedAt)
 	})
+
+	return ordered
+}
+
+// AssignFloorSlots places members top-down: the earliest joiners take the top
+// member floor, and the floor below starts once the one above holds
+// FloorCapacity offices. Equal join times are broken by user id so every client
+// derives the same tower. It is the layout of a tower that has never stored a
+// desk.
+func AssignFloorSlots(members []FloorMember) []FloorSlot {
+	ordered := byJoinOrder(members)
 
 	slots := make([]FloorSlot, 0, len(ordered))
 	for index, member := range ordered {
@@ -52,6 +82,81 @@ func AssignFloorSlots(members []FloorMember) []FloorSlot {
 	}
 
 	return slots
+}
+
+// AssignStableFloorSlots keeps every desk a member already holds and hands the
+// free desks to the members who have none, in join order. A departure therefore
+// leaves an empty office behind instead of moving everybody who joined after the
+// leaver, which is what a tower that doubles as a map of the organisation needs.
+func AssignStableFloorSlots(members []FloorMember, stored map[string]FloorDesk) []FloorSlot {
+	ordered := byJoinOrder(members)
+
+	taken := make(map[int]bool, len(ordered))
+	placed := make(map[string]bool, len(ordered))
+	slots := make([]FloorSlot, 0, len(ordered))
+
+	assign := func(userID string, floorIndex, slot int) {
+		slots = append(slots, FloorSlot{UserID: userID, FloorIndex: floorIndex, Slot: slot})
+		taken[deskKey(floorIndex, slot)] = true
+		placed[userID] = true
+	}
+
+	// A stored desk wins. When two rows claim the same desk the earlier joiner
+	// keeps it; the other one falls through to the passes below.
+	for _, member := range ordered {
+		desk := stored[member.UserID]
+		if !deskKnown(desk) || taken[deskKey(desk.FloorIndex, desk.Slot)] {
+			continue
+		}
+		assign(member.UserID, desk.FloorIndex, desk.Slot)
+	}
+
+	// A member whose floor is stored but whose desk is not keeps the floor, so
+	// the run that introduces desks moves nobody between floors.
+	for _, member := range ordered {
+		if placed[member.UserID] || stored[member.UserID].FloorIndex < models.OfficeFloorMember {
+			continue
+		}
+		if slot, free := freeSlotOnFloor(taken, stored[member.UserID].FloorIndex); free {
+			assign(member.UserID, stored[member.UserID].FloorIndex, slot)
+		}
+	}
+
+	// Everybody else, new joiners included, takes the lowest free desk.
+	next := models.OfficeFloorMember * FloorCapacity
+	for _, member := range ordered {
+		if placed[member.UserID] {
+			continue
+		}
+		for taken[next] {
+			next++
+		}
+		assign(member.UserID, next/FloorCapacity, next%FloorCapacity)
+		next++
+	}
+
+	return slots
+}
+
+// deskKey numbers every desk in the building so "the lowest free desk" can be
+// found by walking one counter instead of every floor.
+func deskKey(floorIndex, slot int) int {
+	return floorIndex*FloorCapacity + slot
+}
+
+func deskKnown(desk FloorDesk) bool {
+	return desk.FloorIndex >= models.OfficeFloorMember &&
+		desk.Slot >= 0 && desk.Slot < FloorCapacity
+}
+
+func freeSlotOnFloor(taken map[int]bool, floorIndex int) (int, bool) {
+	for slot := 0; slot < FloorCapacity; slot++ {
+		if !taken[deskKey(floorIndex, slot)] {
+			return slot, true
+		}
+	}
+
+	return 0, false
 }
 
 // AreaRoomRef builds the composite reference of a per-floor extra, as
@@ -109,19 +214,20 @@ func AreaRoomsForFloor(floorIndex int) []models.OfficeRoomRef {
 }
 
 // SyncFloorAssignments re-balances the tower for an organisation and stores the
-// result on org_user_managements.floor_index. It runs on bootstrap, so a join or
-// a leave re-balances the tower on the next load without a background job. Only
-// members whose floor actually moved are written.
-func (s *Service) SyncFloorAssignments(orgID string) (map[string]int, error) {
+// result on org_user_managements.floor_index and floor_slot. It runs on
+// bootstrap, so a join or a leave is absorbed on the next load without a
+// background job. Only members whose floor or desk actually moved are written.
+func (s *Service) SyncFloorAssignments(orgID string) (*FloorAssignments, error) {
 	type row struct {
 		UserID     string
 		CreatedAt  time.Time
 		FloorIndex *int
+		FloorSlot  *int
 	}
 
 	var rows []row
 	err := s.Db.Postgresql.Table("org_user_managements").
-		Select("user_id, created_at, floor_index").
+		Select("user_id, created_at, floor_index, floor_slot").
 		Where("organisation_id = ?", orgID).
 		Where("is_deactivated = ?", false).
 		Scan(&rows).Error
@@ -130,31 +236,46 @@ func (s *Service) SyncFloorAssignments(orgID string) (map[string]int, error) {
 	}
 
 	members := make([]FloorMember, 0, len(rows))
-	current := make(map[string]*int, len(rows))
+	stored := make(map[string]FloorDesk, len(rows))
 	for _, row := range rows {
 		members = append(members, FloorMember{UserID: row.UserID, JoinedAt: row.CreatedAt})
-		current[row.UserID] = row.FloorIndex
+
+		desk := FloorDesk{FloorIndex: UnknownFloor, Slot: UnknownSlot}
+		if row.FloorIndex != nil {
+			desk.FloorIndex = *row.FloorIndex
+		}
+		if row.FloorSlot != nil {
+			desk.Slot = *row.FloorSlot
+		}
+		stored[row.UserID] = desk
 	}
 
-	slots := AssignFloorSlots(members)
-	floors := make(map[string]int, len(slots))
-	stale := make([]FloorSlot, 0)
-	for _, slot := range slots {
-		floors[slot.UserID] = slot.FloorIndex
-		if stored := current[slot.UserID]; stored == nil || *stored != slot.FloorIndex {
-			stale = append(stale, slot)
+	assignments := &FloorAssignments{
+		Floors: make(map[string]int, len(rows)),
+		Slots:  make(map[string]int, len(rows)),
+	}
+	moved := make([]FloorSlot, 0)
+	for _, slot := range AssignStableFloorSlots(members, stored) {
+		assignments.Floors[slot.UserID] = slot.FloorIndex
+		assignments.Slots[slot.UserID] = slot.Slot
+
+		if stored[slot.UserID] != (FloorDesk{FloorIndex: slot.FloorIndex, Slot: slot.Slot}) {
+			moved = append(moved, slot)
 		}
 	}
 
-	if len(stale) == 0 {
-		return floors, nil
+	if len(moved) == 0 {
+		return assignments, nil
 	}
 
 	err = s.Db.Postgresql.Transaction(func(tx *gorm.DB) error {
-		for _, slot := range stale {
+		for _, slot := range moved {
 			if err := tx.Table("org_user_managements").
 				Where("organisation_id = ? AND user_id = ?", orgID, slot.UserID).
-				Update("floor_index", slot.FloorIndex).Error; err != nil {
+				Updates(map[string]any{
+					"floor_index": slot.FloorIndex,
+					"floor_slot":  slot.Slot,
+				}).Error; err != nil {
 				return err
 			}
 		}
@@ -164,7 +285,7 @@ func (s *Service) SyncFloorAssignments(orgID string) (map[string]int, error) {
 		return nil, err
 	}
 
-	return floors, nil
+	return assignments, nil
 }
 
 // highestFloor is the topmost member floor in use, or the general floor when

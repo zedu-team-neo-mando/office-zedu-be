@@ -111,6 +111,112 @@ func TestAssignFloorSlotsIgnoresInputOrder(t *testing.T) {
 	}
 }
 
+// desksOf turns an assignment into the map the tower stores.
+func desksOf(slots []office.FloorSlot) map[string]office.FloorDesk {
+	desks := make(map[string]office.FloorDesk, len(slots))
+	for _, slot := range slots {
+		desks[slot.UserID] = office.FloorDesk{FloorIndex: slot.FloorIndex, Slot: slot.Slot}
+	}
+
+	return desks
+}
+
+// A departure must leave an empty office behind, not slide everybody who joined
+// after the leaver one desk back and pull the first office of the floor below up.
+func TestAssignStableFloorSlotsKeepsDesksWhenAMemberLeaves(t *testing.T) {
+	people := members(models.OfficeFloorCapacity + 3)
+	before := office.AssignStableFloorSlots(people, nil)
+
+	// The first member of the top floor leaves the organisation.
+	after := office.AssignStableFloorSlots(people[1:], desksOf(before))
+	afterDesks := desksOf(after)
+
+	for _, slot := range before[1:] {
+		if got := afterDesks[slot.UserID]; got != (office.FloorDesk{FloorIndex: slot.FloorIndex, Slot: slot.Slot}) {
+			t.Fatalf(
+				"member %s moved from floor %d desk %d to floor %d desk %d because somebody else left",
+				slot.UserID, slot.FloorIndex, slot.Slot, got.FloorIndex, got.Slot,
+			)
+		}
+	}
+
+	// The desk the leaver held stays empty instead of being handed on.
+	for _, slot := range after {
+		if slot.FloorIndex == models.OfficeFloorMember && slot.Slot == 0 {
+			t.Fatalf("member %s took the leaver's desk; it should stay empty until the next joiner", slot.UserID)
+		}
+	}
+}
+
+// Rows written before desks existed only carry their floor. Introducing desks
+// must not move anybody between floors.
+func TestAssignStableFloorSlotsKeepsStoredFloorsWithoutDesks(t *testing.T) {
+	people := members(models.OfficeFloorCapacity + 4)
+	stored := make(map[string]office.FloorDesk, len(people))
+	for index, member := range people {
+		stored[member.UserID] = office.FloorDesk{
+			FloorIndex: models.OfficeFloorMember + index/models.OfficeFloorCapacity,
+			Slot:       office.UnknownSlot,
+		}
+	}
+
+	for _, slot := range office.AssignStableFloorSlots(people, stored) {
+		if want := stored[slot.UserID].FloorIndex; slot.FloorIndex != want {
+			t.Fatalf("member %s moved from floor %d to floor %d while desks were introduced", slot.UserID, want, slot.FloorIndex)
+		}
+	}
+
+	// Desks on a floor are unique and start at zero.
+	seen := map[string]int{}
+	for _, slot := range office.AssignStableFloorSlots(people, stored) {
+		key := fmt.Sprintf("%d:%d", slot.FloorIndex, slot.Slot)
+		if seen[key] != 0 {
+			t.Fatalf("floor %d desk %d was given to two members", slot.FloorIndex, slot.Slot)
+		}
+		seen[key] = 1
+	}
+}
+
+// Two rows claiming one desk keep the earlier joiner there; the later one is
+// placed elsewhere instead of sharing the office.
+func TestAssignStableFloorSlotsBreaksDeskCollisionsByJoinOrder(t *testing.T) {
+	people := members(3)
+	stored := map[string]office.FloorDesk{
+		"usr_000": {FloorIndex: models.OfficeFloorMember, Slot: 7},
+		"usr_001": {FloorIndex: models.OfficeFloorMember, Slot: 7},
+		"usr_002": {FloorIndex: models.OfficeFloorMember, Slot: 7},
+	}
+
+	desks := desksOf(office.AssignStableFloorSlots(people, stored))
+
+	if got := desks["usr_000"]; got.Slot != 7 {
+		t.Fatalf("the earliest joiner must keep desk 7, got %d", got.Slot)
+	}
+	if got := desks["usr_001"]; got.Slot == 7 {
+		t.Fatal("the second member was given the same desk as the first")
+	}
+	if desks["usr_001"] != (office.FloorDesk{FloorIndex: models.OfficeFloorMember, Slot: 0}) {
+		t.Fatalf("the second member should take the lowest free desk, got %+v", desks["usr_001"])
+	}
+}
+
+// New joiners fill the gaps a tower already has before a floor below is used.
+func TestAssignStableFloorSlotsGivesNewJoinersTheLowestFreeDesk(t *testing.T) {
+	people := members(models.OfficeFloorCapacity + 1)
+	before := office.AssignStableFloorSlots(people, nil)
+
+	// A new member joins a tower whose top floor is full.
+	newcomer := office.FloorMember{
+		UserID:   "usr_new",
+		JoinedAt: people[len(people)-1].JoinedAt.Add(time.Hour),
+	}
+	after := desksOf(office.AssignStableFloorSlots(append(people, newcomer), desksOf(before)))
+
+	if got := after["usr_new"]; got != (office.FloorDesk{FloorIndex: models.OfficeFloorMember + 1, Slot: 1}) {
+		t.Fatalf("the newcomer should take the next free desk on the floor below, got %+v", got)
+	}
+}
+
 func TestAreaRoomsForFloor(t *testing.T) {
 	if rooms := office.AreaRoomsForFloor(models.OfficeFloorGeneral); rooms != nil {
 		t.Fatalf("the general floor has no extras, got %d", len(rooms))

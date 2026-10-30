@@ -264,6 +264,7 @@ type OfficeMemberResponse struct {
 	Tint        string `json:"tint,omitempty"`
 	Role        string `json:"role,omitempty"`
 	FloorIndex  int    `json:"floorIndex"`
+	FloorSlot   int    `json:"floorSlot"`
 	RoomID      string `json:"roomId"`
 	Online      bool   `json:"online"`
 	Status      string `json:"status"`
