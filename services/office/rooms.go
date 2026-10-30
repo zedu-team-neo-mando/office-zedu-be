@@ -124,11 +124,11 @@ func (s *Service) BuildDirectory(orgID, userID string, sets AccessSets) (*Direct
 		return nil, err
 	}
 
-	floors, err := s.SyncFloorAssignments(orgID)
+	assignments, err := s.SyncFloorAssignments(orgID)
 	if err != nil {
 		return nil, err
 	}
-	directory.Floors = floors
+	directory.Floors = assignments.Floors
 
 	appendRoom := func(kind, ref, name string, index int, locked bool) {
 		bounds := defaultBounds(kind, ref, index)
@@ -200,7 +200,7 @@ func (s *Service) BuildDirectory(orgID, userID string, sets AccessSets) (*Direct
 	for index, member := range members {
 		ref := models.OfficeRoomRef{Kind: models.OfficeRoomKindPersonal, Ref: member.UserID}
 		access := CanAccessFromSets(sets, ref, userID)
-		floor := memberFloor(floors, member.UserID)
+		floor := memberFloor(assignments.Floors, member.UserID)
 		// The slot comes from the full member list so the wing looks the same
 		// for everybody, but the floor comes from the tower assignment.
 		before := len(directory.Rooms)
@@ -221,6 +221,7 @@ func (s *Service) BuildDirectory(orgID, userID string, sets AccessSets) (*Direct
 			Tint:        member.Tint,
 			Role:        member.Role,
 			FloorIndex:  floor,
+			FloorSlot:   assignments.Slots[member.UserID],
 			RoomID:      EncodeRoomID(models.OfficeRoomKindPersonal, member.UserID),
 			Online:      member.Online,
 			Status:      member.Status,
@@ -231,7 +232,7 @@ func (s *Service) BuildDirectory(orgID, userID string, sets AccessSets) (*Direct
 
 	// Every member floor carries its extras. They are rooms in their own right
 	// so presence and access follow them, and nobody is allocated a desk there.
-	for floor := models.OfficeFloorMember; floor <= highestFloor(floors); floor++ {
+	for floor := models.OfficeFloorMember; floor <= highestFloor(assignments.Floors); floor++ {
 		for index, area := range AreaRoomsForFloor(floor) {
 			_, key, ok := ParseAreaRef(area.Ref)
 			if !ok {
@@ -265,10 +266,11 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 		return nil, nil // caller will handle 403/404
 	}
 
-	floors, err := s.SyncFloorAssignments(orgID)
+	assignments, err := s.SyncFloorAssignments(orgID)
 	if err != nil {
 		return nil, err
 	}
+	floors := assignments.Floors
 
 	// Build just this room
 	kind := ref.Kind

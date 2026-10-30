@@ -28,6 +28,12 @@ func OfficeIndexes(db *gorm.DB) {
 		// Fast lookups by room.
 		`CREATE INDEX IF NOT EXISTS idx_office_layouts_room
 			ON office_layouts (organisation_id, room_kind, ref_id, status)`,
+
+		// The tower stores the desk each member holds so an office keeps its
+		// place when a colleague leaves. AutoMigrate adds the column; this
+		// index keeps the per-organisation layout read cheap.
+		`CREATE INDEX IF NOT EXISTS idx_org_user_managements_floor_desk
+			ON org_user_managements (organisation_id, floor_index, floor_slot)`,
 	}
 
 	for _, statement := range statements {
