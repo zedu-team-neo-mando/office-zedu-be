@@ -386,10 +386,17 @@ type channelSummary struct {
 	Joined    bool
 }
 
-// Active channels may have NULL or Go's zero timestamp in the legacy
-// non-nullable Channels.DeletedAt column. A real deletion timestamp stays excluded.
+// activeOfficeChannels is the office's view of chat channels: the rows the 2D
+// chat still lists. Active channels may have NULL or Go's zero timestamp in
+// the legacy non-nullable Channels.DeletedAt column, so a real deletion
+// timestamp stays excluded. Archived channels are hidden from the 2D list
+// (internal/models/channel.go filters "channels.archived = FALSE"), so they must
+// not stay open as office rooms either; a NULL flag is legacy and follows the
+// same rule.
 func activeOfficeChannels(db *gorm.DB) *gorm.DB {
-	return db.Where("channels.deleted_at IS NULL OR channels.deleted_at = ?", time.Time{})
+	return db.
+		Where("channels.deleted_at IS NULL OR channels.deleted_at = ?", time.Time{}).
+		Where("channels.archived = FALSE")
 }
 
 // channelsForUser returns every channel in the organisation, with the
