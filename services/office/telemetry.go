@@ -154,6 +154,9 @@ type telemetryBatch struct {
 	// Ignored counts events skipped because this server does not know their
 	// kind. They are not errors and they are not written.
 	Ignored int
+	// Duplicated counts event IDs seen more than once inside this batch.
+	// They are dropped before insert so the reported count is honest.
+	Duplicated int
 	// HasSessionEnd is true when the batch closes the visit, which finalises
 	// the aggregate row.
 	HasSessionEnd bool
@@ -199,8 +202,8 @@ func PrepareTelemetry(orgID, userID string, req models.OfficeTelemetryRequest) (
 	}
 
 	entryPoint := strings.TrimSpace(req.Session.EntryPoint)
-	if len(entryPoint) > maxTelemetryEntryPoint {
-		entryPoint = entryPoint[:maxTelemetryEntryPoint]
+	if runes := []rune(entryPoint); len(runes) > maxTelemetryEntryPoint {
+		entryPoint = string(runes[:maxTelemetryEntryPoint])
 	}
 
 	batch := &telemetryBatch{
@@ -231,6 +234,7 @@ func PrepareTelemetry(orgID, userID string, req models.OfficeTelemetryRequest) (
 		}
 
 		if seen[eventID.String()] {
+			batch.Duplicated++
 			continue
 		}
 
@@ -305,7 +309,7 @@ func (s *Service) IngestTelemetry(cmd models.OfficeTelemetryCommand) (*models.Of
 		return nil, err
 	}
 
-	response := &models.OfficeTelemetryResponse{Ignored: batch.Ignored}
+	response := &models.OfficeTelemetryResponse{Ignored: batch.Ignored, Duplicated: batch.Duplicated}
 
 	if len(batch.Rows) == 0 {
 		return response, nil
@@ -316,15 +320,33 @@ func (s *Service) IngestTelemetry(cmd models.OfficeTelemetryCommand) (*models.Of
 			return err
 		}
 
+		// The insert collides on the unique (organisation_id, user_id,
+		// session_id) pair and changes nothing on repeat. Reject a batch that
+		// claims a different session start than the one already recorded,
+		// normalizing both to database precision first.
+		var existingStartedAt time.Time
+		if err := tx.Raw(`SELECT started_at FROM office_visits
+			WHERE organisation_id = $1 AND user_id = $2 AND session_id = $3`,
+			batch.OrganisationID, batch.UserID, batch.SessionID).Scan(&existingStartedAt).Error; err != nil {
+			return fmt.Errorf("could not read the existing office visit: %w", err)
+		}
+		if !existingStartedAt.IsZero() {
+			existing := existingStartedAt.UTC().Truncate(time.Microsecond)
+			claimed := batch.StartedAt.UTC().Truncate(time.Microsecond)
+			if !existing.Equal(claimed) {
+				return fmt.Errorf("%w: session %q already started at %s", ErrTelemetryStartedAt, batch.SessionID, existing)
+			}
+		}
+
 		accepted, err := insertTelemetryEvents(tx, batch.Rows)
 		if err != nil {
 			return err
 		}
 
 		response.Accepted = accepted
-		response.Duplicated = len(batch.Rows) - accepted
+		response.Duplicated += len(batch.Rows) - accepted
 
-		return refreshTelemetryVisit(tx, cmd.OrganisationID, cmd.UserID, batch.SessionID)
+		return refreshTelemetryVisit(tx, batch)
 	})
 	if err != nil {
 		return nil, err
@@ -441,10 +463,12 @@ type telemetryAggregate struct {
 // and the visit is closed with a duration only once a session.end is stored.
 // The visit row is locked with FOR UPDATE before the aggregate read so that
 // overlapping batches for one session cannot overwrite each other's totals.
-func refreshTelemetryVisit(tx *gorm.DB, orgID, userID, sessionID string) error {
+// batch carries the organisation, user and session identity the visit is
+// scoped to, keeping the call inside the three-positional-parameter limit.
+func refreshTelemetryVisit(tx *gorm.DB, batch *telemetryBatch) error {
 	lock := `SELECT 1 FROM office_visits
 	WHERE organisation_id = $1 AND user_id = $2 AND session_id = $3 FOR UPDATE`
-	if err := tx.Exec(lock, orgID, userID, sessionID).Error; err != nil {
+	if err := tx.Exec(lock, batch.OrganisationID, batch.UserID, batch.SessionID).Error; err != nil {
 		return fmt.Errorf("could not lock the office visit: %w", err)
 	}
 
@@ -460,7 +484,7 @@ func refreshTelemetryVisit(tx *gorm.DB, orgID, userID, sessionID string) error {
 	WHERE organisation_id = $1 AND user_id = $2 AND session_id = $3`
 
 	var aggregate telemetryAggregate
-	if err := tx.Raw(read, orgID, userID, sessionID).Scan(&aggregate).Error; err != nil {
+	if err := tx.Raw(read, batch.OrganisationID, batch.UserID, batch.SessionID).Scan(&aggregate).Error; err != nil {
 		return fmt.Errorf("could not total the office events: %w", err)
 	}
 
@@ -488,9 +512,9 @@ func refreshTelemetryVisit(tx *gorm.DB, orgID, userID, sessionID string) error {
 		aggregate.Dwell,
 		endedAt,
 		models.OfficeVisitEndReasonSessionEnd,
-		orgID,
-		userID,
-		sessionID,
+		batch.OrganisationID,
+		batch.UserID,
+		batch.SessionID,
 	).Error; err != nil {
 		return fmt.Errorf("could not update the office visit: %w", err)
 	}
