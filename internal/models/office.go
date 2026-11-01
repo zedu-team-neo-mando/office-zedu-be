@@ -410,9 +410,9 @@ const OfficeTelemetryModeLive = "live"
 //	  rooms_visited, floors_visited, end_reason, created_at, updated_at
 type OfficeVisit struct {
 	ID             string     `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
-	OrganisationID string     `gorm:"column:organisation_id;type:uuid;not null;uniqueIndex:idx_office_visits_org_session,priority:1" json:"organisation_id"`
-	UserID         string     `gorm:"column:user_id;type:uuid;not null;index" json:"user_id"`
-	SessionID      string     `gorm:"column:session_id;type:varchar(64);not null;uniqueIndex:idx_office_visits_org_session,priority:2" json:"session_id"`
+	OrganisationID string     `gorm:"column:organisation_id;type:uuid;not null;uniqueIndex:idx_office_visits_org_user_session,priority:1" json:"organisation_id"`
+	UserID         string     `gorm:"column:user_id;type:uuid;not null;index;uniqueIndex:idx_office_visits_org_user_session,priority:2" json:"user_id"`
+	SessionID      string     `gorm:"column:session_id;type:varchar(64);not null;uniqueIndex:idx_office_visits_org_user_session,priority:3" json:"session_id"`
 	Mode           string     `gorm:"column:mode;type:varchar(16);not null" json:"mode"`
 	EntryPoint     string     `gorm:"column:entry_point;type:varchar(32)" json:"entry_point"`
 	StartedAt      time.Time  `gorm:"column:started_at;not null" json:"started_at"`
