@@ -87,7 +87,7 @@ func (s *Service) JoinRoom(command models.OfficePresenceCommand) error {
 		return err
 	}
 
-	target := NewChannelTarget(command.OrganisationID, command.Room)
+	target := s.ChannelTarget(command.OrganisationID, command.Room)
 	if err := s.PublishPresence(target, presence, "join"); err != nil {
 		// Publish is an announcement; Redis is the source of truth. A
 		// Centrifugo hiccup must not 500 a room entry.
@@ -112,7 +112,7 @@ func (s *Service) LeaveRoom(orgID, userID string, ref models.OfficeRoomRef) erro
 		UserID: userID,
 		RoomID: roomID,
 	}
-	target := NewChannelTarget(orgID, ref)
+	target := s.ChannelTarget(orgID, ref)
 	if err := s.PublishPresence(target, presence, "leave"); err != nil {
 		// Publish is an announcement; Redis is the source of truth. A
 		// Centrifugo hiccup must not 500 a room leave.
@@ -152,7 +152,7 @@ func (s *Service) UpdatePresence(command models.OfficePresenceUpdateCommand) err
 		return err
 	}
 
-	target := NewChannelTarget(command.OrganisationID, command.Room)
+	target := s.ChannelTarget(command.OrganisationID, command.Room)
 	if err := s.PublishPresence(target, current, "update"); err != nil {
 		// Publish is an announcement; Redis is the source of truth. A
 		// Centrifugo hiccup must not fail a movement update.

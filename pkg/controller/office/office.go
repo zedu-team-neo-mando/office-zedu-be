@@ -520,7 +520,7 @@ func (base *Controller) PublishLayout(c *gin.Context) {
 		return
 	}
 
-	office.PublishLayoutUpdate(service.NewChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
+	office.PublishLayoutUpdate(office.ChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
 
 	rd := utility.BuildSuccessResponse(http.StatusOK, "layout published", service.ToResponse(layout))
 	c.JSON(http.StatusOK, rd)
@@ -559,7 +559,7 @@ func (base *Controller) ResetLayout(c *gin.Context) {
 		return
 	}
 
-	office.PublishLayoutUpdate(service.NewChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
+	office.PublishLayoutUpdate(office.ChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
 
 	rd := utility.BuildSuccessResponse(http.StatusOK, "room reset", service.ToResponse(layout))
 	c.JSON(http.StatusOK, rd)
@@ -753,7 +753,7 @@ func (base *Controller) EnterRoom(c *gin.Context) {
 		return
 	}
 
-	target := service.NewChannelTarget(requester.OrgID, ref)
+	target := service.ChannelTargetForFloor(requester.OrgID, ref, room.FloorIndex)
 	payload := map[string]any{
 		"roomId":   roomID,
 		"presence": presence,
