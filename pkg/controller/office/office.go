@@ -909,6 +909,12 @@ func (base *Controller) SaveAvatar(c *gin.Context) {
 		return
 	}
 
+	if err := base.Validator.Struct(&request); err != nil {
+		rd := utility.BuildErrorResponse(http.StatusUnprocessableEntity, "error", "validation failed", utility.ValidationResponse(err, base.Validator), nil)
+		c.JSON(http.StatusUnprocessableEntity, rd)
+		return
+	}
+
 	avatar := models.OfficeAvatarConfig{
 		Tint:      request.Tint,
 		Body:      request.Body,
