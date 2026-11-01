@@ -28,6 +28,20 @@ func OfficeIndexes(db *gorm.DB) {
 		// Fast lookups by room.
 		`CREATE INDEX IF NOT EXISTS idx_office_layouts_room
 			ON office_layouts (organisation_id, room_kind, ref_id, status)`,
+
+		// Telemetry reads are always scoped to one organisation and a window
+		// of time, so every event index leads with organisation_id.
+		`CREATE INDEX IF NOT EXISTS idx_office_events_org_time
+			ON office_events (organisation_id, occurred_at)`,
+
+		`CREATE INDEX IF NOT EXISTS idx_office_events_org_kind_time
+			ON office_events (organisation_id, kind, occurred_at)`,
+
+		`CREATE INDEX IF NOT EXISTS idx_office_events_org_room_time
+			ON office_events (organisation_id, room_kind, room_ref, occurred_at)`,
+
+		`CREATE INDEX IF NOT EXISTS idx_office_visits_org_started
+			ON office_visits (organisation_id, started_at)`,
 	}
 
 	for _, statement := range statements {

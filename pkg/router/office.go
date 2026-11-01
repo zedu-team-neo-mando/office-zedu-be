@@ -42,6 +42,10 @@ func Office(r *gin.Engine, ApiVersion string, validator *validator.Validate, db 
 		officeUrl.POST("/rooms/:roomId/presence", officeController.UpdatePresence)
 		officeUrl.POST("/rooms/:roomId/leave", officeController.LeaveRoom)
 
+		// Telemetry. The write is the requester's own session, so it needs no
+		// more than the routes above: who sent it comes from the token.
+		officeUrl.POST("/telemetry", officeController.Telemetry)
+
 		// Layouts
 		officeUrl.GET("/rooms/:roomId/layout", officeController.GetLayout)
 		officeUrl.GET("/rooms/:roomId/layout/draft", officeController.GetDraft)
