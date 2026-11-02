@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -224,6 +226,123 @@ func (s *Service) Occupants(orgID string, ref models.OfficeRoomRef) ([]models.Of
 	}
 
 	return LiveOccupants(occupants, time.Now().UTC()), nil
+}
+
+// OccupancyEntryCap bounds how many people one occupancy read may return. The
+// tower draws a whole building, and a pathological key space must not turn a
+// page load into an unbounded read.
+const OccupancyEntryCap = 500
+
+// occupancyScanBatch is how many keys SCAN returns per round trip.
+const occupancyScanBatch = 200
+
+// OccupancyPattern names every presence hash of one organisation. The
+// organisation is escaped, so a value carrying glob characters cannot widen the
+// match onto another organisation's rooms.
+func OccupancyPattern(orgID string) string {
+	return presenceKeyPrefix + escapeRedisGlob(orgID) + ":*"
+}
+
+// escapeRedisGlob escapes the characters Redis treats as a match pattern.
+func escapeRedisGlob(value string) string {
+	var escaped strings.Builder
+	for _, r := range value {
+		if strings.ContainsRune(`*?[]\`, r) {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(r)
+	}
+	return escaped.String()
+}
+
+// MergeOccupants flattens the per-room presence hashes into one list for the
+// building. A person appears once, at the room they were last seen in, and an
+// entry older than the presence TTL is dropped the same way a room read drops
+// it. The result is ordered by room and then user so two reads of the same
+// building agree, and capped at OccupancyEntryCap.
+func MergeOccupants(
+	hashes map[string]map[string]string,
+	now time.Time,
+) []models.OfficeOccupantResponse {
+	byUser := make(map[string]models.OfficeOccupantResponse, len(hashes))
+
+	for _, values := range hashes {
+		for _, raw := range values {
+			var occupant models.OfficeOccupantResponse
+			if err := json.Unmarshal([]byte(raw), &occupant); err != nil {
+				continue
+			}
+			if occupant.UserID == "" {
+				continue
+			}
+			if current, seen := byUser[occupant.UserID]; seen &&
+				!occupant.UpdatedAt.After(current.UpdatedAt) {
+				continue
+			}
+			byUser[occupant.UserID] = occupant
+		}
+	}
+
+	occupants := make([]models.OfficeOccupantResponse, 0, len(byUser))
+	for _, occupant := range byUser {
+		occupants = append(occupants, occupant)
+	}
+
+	occupants = LiveOccupants(occupants, now)
+	sort.Slice(occupants, func(i, j int) bool {
+		if occupants[i].RoomID != occupants[j].RoomID {
+			return occupants[i].RoomID < occupants[j].RoomID
+		}
+		return occupants[i].UserID < occupants[j].UserID
+	})
+
+	if len(occupants) > OccupancyEntryCap {
+		occupants = occupants[:OccupancyEntryCap]
+	}
+	return occupants
+}
+
+// Occupancy returns everybody with live presence anywhere in the organisation's
+// building, across every floor and room kind. Presence is one hash per room, so
+// the read walks the organisation's keys with SCAN and then flattens them; the
+// rooms nobody is standing in have no key at all and cost nothing.
+func (s *Service) Occupancy(orgID string) ([]models.OfficeOccupantResponse, error) {
+	if s.Db.Redis == nil || orgID == "" {
+		return []models.OfficeOccupantResponse{}, nil
+	}
+
+	ctx := context.Background()
+	cursor := uint64(0)
+	hashes := make(map[string]map[string]string)
+
+	for {
+		keys, next, err := s.Db.Redis.Scan(
+			ctx,
+			cursor,
+			OccupancyPattern(orgID),
+			occupancyScanBatch,
+		).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		for _, key := range keys {
+			values, err := s.Db.Redis.HGetAll(ctx, key).Result()
+			if err != nil {
+				return nil, err
+			}
+			if len(values) > 0 {
+				hashes[key] = values
+			}
+		}
+
+		if next == 0 {
+			break
+		}
+		cursor = next
+	}
+
+	return MergeOccupants(hashes, time.Now().UTC()), nil
 }
 
 // storePresence writes one person's presence into the room's hash.

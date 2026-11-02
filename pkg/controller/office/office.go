@@ -655,6 +655,25 @@ func (base *Controller) Occupants(c *gin.Context) {
 	c.JSON(http.StatusOK, rd)
 }
 
+// Occupancy returns everybody standing anywhere in the organisation's building.
+// It is the tower's roster: the building is drawn as a whole, so the client
+// needs every room at once instead of one request per room.
+func (base *Controller) Occupancy(c *gin.Context) {
+	requester, ok := base.authorise(c)
+	if !ok {
+		return
+	}
+
+	occupants, err := base.service().Occupancy(requester.OrgID)
+	if err != nil {
+		base.fail(c, "failed to load the building occupancy", err)
+		return
+	}
+
+	rd := utility.BuildSuccessResponse(http.StatusOK, "building occupancy", occupants)
+	c.JSON(http.StatusOK, rd)
+}
+
 // EnterRoom records that the requester entered a room and returns the
 // realtime channels they may subscribe to.
 func (base *Controller) EnterRoom(c *gin.Context) {
