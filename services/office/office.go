@@ -74,6 +74,14 @@ func ParseRoomID(roomID string) (models.OfficeRoomRef, error) {
 			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is not a valid area reference", roomID)
 		}
 		return models.OfficeRoomRef{Kind: kind, Ref: ref}, nil
+	case models.OfficeRoomKindPortal:
+		if !found {
+			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is missing its reference", roomID)
+		}
+		if _, ok := ParsePortalRef(ref); !ok {
+			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is not a valid portal reference", roomID)
+		}
+		return models.OfficeRoomRef{Kind: kind, Ref: ref}, nil
 	default:
 		return models.OfficeRoomRef{}, fmt.Errorf("unknown room kind %q", kind)
 	}
@@ -96,6 +104,11 @@ func RoomFloorIndex(ref models.OfficeRoomRef) int {
 			return floor
 		}
 		return models.OfficeFloorMember
+	case models.OfficeRoomKindPortal:
+		if floor, ok := ParsePortalRef(ref.Ref); ok {
+			return floor
+		}
+		return models.OfficeFloorGeneral
 	case models.OfficeRoomKindPersonal:
 		return models.OfficeFloorMember
 	default:
