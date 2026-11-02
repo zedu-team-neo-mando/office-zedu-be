@@ -22,6 +22,7 @@ const (
 	OfficeRoomKindChannel   = "channel"
 	OfficeRoomKindPersonal  = "personal"
 	OfficeRoomKindArea      = "area"
+	OfficeRoomKindPortal    = "portal"
 )
 
 // The per-floor extras. They are ordinary rooms on a member floor, not desks,

@@ -2,6 +2,7 @@ package office
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,9 +77,18 @@ func defaultBounds(kind, ref string, index int) models.OfficeBounds {
 			H: 5.4,
 		}
 	case models.OfficeRoomKindArea:
-		// The three extras share a strip below the offices, so a member never
-		// has to walk to another storey to find them.
-		return models.OfficeBounds{X: 2 + float64(index)*18, Y: 28.6, W: 16, H: 6.4}
+		// The extras share the strip below the offices. Three bays and the
+		// portal fill it edge to edge, so a member never has to walk to another
+		// storey to find them.
+		return models.OfficeBounds{X: 1.2 + float64(index)*14, Y: 28.6, W: 12.8, H: 6.4}
+	case models.OfficeRoomKindPortal:
+		// The portal is the fourth bay of the extras strip on a member floor.
+		// On the general floor it sits beside the meeting rooms, clear of the
+		// channel rows below.
+		if floor, ok := ParsePortalRef(ref); ok && floor >= models.OfficeFloorMember {
+			return models.OfficeBounds{X: 43.2, Y: 28.6, W: 12.8, H: 6.4}
+		}
+		return models.OfficeBounds{X: 44.6, Y: 8.6, W: 9, H: 6}
 	default:
 		return models.OfficeBounds{X: 0, Y: 0, W: 4, H: 4}
 	}
@@ -100,6 +110,9 @@ func defaultCapacity(kind string) int {
 		return 4
 	case models.OfficeRoomKindArea:
 		return 12
+	case models.OfficeRoomKindPortal:
+		// A portal is circulation: people pass through, they do not stay.
+		return 0
 	default:
 		return 8
 	}
@@ -241,6 +254,16 @@ func (s *Service) BuildDirectory(orgID, userID string, sets AccessSets) (*Direct
 		}
 	}
 
+	// The two wings of the building are joined by one doorway per storey: the
+	// member floors lead down to the channels floor, the channels floor leads
+	// back up. Which private floor the return portal reaches is client state, so
+	// the server only names the two sides.
+	if top := highestFloor(floors); top >= models.OfficeFloorMember {
+		for floor := models.OfficeFloorGeneral; floor <= top; floor++ {
+			appendRoom(models.OfficeRoomKindPortal, strconv.Itoa(floor), PortalRoomName(floor), 0, false)
+		}
+	}
+
 	// Direct messages map to the counterpart's office.
 	dmMap, err := s.dmOfficeMap(orgID, userID)
 	if err != nil {
@@ -273,6 +296,15 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 	// Build just this room
 	kind := ref.Kind
 	refStr := ref.Ref
+
+	// A portal only exists on a storey the tower still has, so a request for a
+	// member floor the organisation has outgrown cannot record presence there.
+	if kind == models.OfficeRoomKindPortal {
+		if floor, ok := ParsePortalRef(refStr); !ok || !HasPortalFloor(floors, floor) {
+			return nil, nil
+		}
+	}
+
 	name := ""
 	index := 0
 	locked := false
@@ -321,6 +353,12 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 			name = AreaRoomName(key)
 		} else {
 			name = "Area"
+		}
+	case models.OfficeRoomKindPortal:
+		if floor, ok := ParsePortalRef(refStr); ok {
+			name = PortalRoomName(floor)
+		} else {
+			name = "Portal"
 		}
 	}
 
