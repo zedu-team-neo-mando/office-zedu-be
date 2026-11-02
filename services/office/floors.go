@@ -121,6 +121,17 @@ func PortalRoomName(floorIndex int) string {
 	return "Channels"
 }
 
+// HasPortalFloor reports whether a storey still carries a portal. The channels
+// floor only leads somewhere while the tower has a member floor, and no storey
+// above the highest assignment gets a doorway when the organisation shrinks.
+func HasPortalFloor(floors map[string]int, floorIndex int) bool {
+	top := highestFloor(floors)
+
+	return top >= models.OfficeFloorMember &&
+		floorIndex >= models.OfficeFloorGeneral &&
+		floorIndex <= top
+}
+
 // AreaRoomsForFloor returns the extras that make a member floor more than a row
 // of desks. The general floor has its own shared rooms and no extras.
 func AreaRoomsForFloor(floorIndex int) []models.OfficeRoomRef {

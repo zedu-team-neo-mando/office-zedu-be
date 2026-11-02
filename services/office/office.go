@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/hngprojects/telex_be/internal/models"
@@ -78,10 +79,13 @@ func ParseRoomID(roomID string) (models.OfficeRoomRef, error) {
 		if !found {
 			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is missing its reference", roomID)
 		}
-		if _, ok := ParsePortalRef(ref); !ok {
+		floor, ok := ParsePortalRef(ref)
+		if !ok {
 			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is not a valid portal reference", roomID)
 		}
-		return models.OfficeRoomRef{Kind: kind, Ref: ref}, nil
+		// "portal:01" and "portal:1" are the same storey. Keep one identity so
+		// presence, layout overrides and realtime channels cannot split in two.
+		return models.OfficeRoomRef{Kind: kind, Ref: strconv.Itoa(floor)}, nil
 	default:
 		return models.OfficeRoomRef{}, fmt.Errorf("unknown room kind %q", kind)
 	}

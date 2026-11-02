@@ -296,6 +296,15 @@ func (s *Service) GetRoom(orgID, userID string, sets AccessSets, ref models.Offi
 	// Build just this room
 	kind := ref.Kind
 	refStr := ref.Ref
+
+	// A portal only exists on a storey the tower still has, so a request for a
+	// member floor the organisation has outgrown cannot record presence there.
+	if kind == models.OfficeRoomKindPortal {
+		if floor, ok := ParsePortalRef(refStr); !ok || !HasPortalFloor(floors, floor) {
+			return nil, nil
+		}
+	}
+
 	name := ""
 	index := 0
 	locked := false
