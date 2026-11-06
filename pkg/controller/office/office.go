@@ -353,13 +353,7 @@ func (base *Controller) GetLayout(c *gin.Context) {
 	}
 
 	if layout == nil {
-		rd := utility.BuildSuccessResponse(http.StatusOK, "room layout", models.OfficeLayoutResponse{
-			RoomID:  service.EncodeRoomID(ref.Kind, ref.Ref),
-			Version: 0,
-			Status:  "",
-			Grid:    models.OfficeGrid{Width: int(service.OfficeBuildingWidth), Height: int(service.OfficeBuildingHeight), Tile: service.OfficeTileSize},
-			Items:   []models.OfficeFurnitureItem{},
-		})
+		rd := utility.BuildSuccessResponse(http.StatusOK, "room layout", service.EmptyLayoutResponse(ref))
 		c.JSON(http.StatusOK, rd)
 		return
 	}
@@ -402,10 +396,7 @@ func (base *Controller) GetDraft(c *gin.Context) {
 	}
 
 	if draft == nil {
-		rd := utility.BuildSuccessResponse(http.StatusOK, "room draft", models.OfficeLayoutResponse{
-			RoomID: service.EncodeRoomID(ref.Kind, ref.Ref),
-			Items:  []models.OfficeFurnitureItem{},
-		})
+		rd := utility.BuildSuccessResponse(http.StatusOK, "room draft", service.EmptyLayoutResponse(ref))
 		c.JSON(http.StatusOK, rd)
 		return
 	}
