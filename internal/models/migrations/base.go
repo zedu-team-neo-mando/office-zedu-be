@@ -57,8 +57,11 @@ func FixDeletedAtColumns(db *gorm.DB) {
 							AND table_name = legacy.table_name
 							AND column_name = 'deleted_at'
 					) THEN
+						-- A historical model wrote a zero timestamp instead of NULL,
+						-- so a NULL-only predicate would keep the zero value and the
+						-- drop below would discard the real deletion time.
 						EXECUTE format(
-							'UPDATE %I SET deleted_at = %I WHERE deleted_at IS NULL AND %I > ''0001-01-02''',
+							'UPDATE %I SET deleted_at = %I WHERE (deleted_at IS NULL OR deleted_at < ''0001-01-02'') AND %I > ''0001-01-02''',
 							legacy.table_name, ' deleted_at', ' deleted_at'
 						);
 						EXECUTE format(
