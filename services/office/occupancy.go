@@ -233,8 +233,16 @@ func (s *Service) Occupants(orgID string, ref models.OfficeRoomRef) ([]models.Of
 // page load into an unbounded read.
 const OccupancyEntryCap = 500
 
+// OccupancyRoomCap bounds how many room hashes one occupancy read may open, so a
+// pathological key space cannot turn a page load into an unbounded scan. Rooms
+// that hold nobody still have a key, so this is counted per key, not per person.
+const OccupancyRoomCap = 500
+
 // occupancyScanBatch is how many keys SCAN returns per round trip.
 const occupancyScanBatch = 200
+
+// occupancyHashBatch is how many fields HSCAN returns per round trip.
+const occupancyHashBatch = 100
 
 // OccupancyPattern names every presence hash of one organisation. The
 // organisation is escaped, so a value carrying glob characters cannot widen the
@@ -306,15 +314,26 @@ func MergeOccupants(
 // building, across every floor and room kind. Presence is one hash per room, so
 // the read walks the organisation's keys with SCAN and then flattens them; the
 // rooms nobody is standing in have no key at all and cost nothing.
-func (s *Service) Occupancy(orgID string) ([]models.OfficeOccupantResponse, error) {
-	if s.Db.Redis == nil || orgID == "" {
+//
+// The read is bounded twice over: at most OccupancyRoomCap rooms are opened and
+// at most OccupancyEntryCap presence fields are read, each hash through HSCAN so
+// a single enormous room cannot be loaded in full. Redis being unreachable
+// answers with an empty building instead of an error, because the tower is a
+// live-only decoration and an empty answer is always safe.
+func (s *Service) Occupancy(
+	ctx context.Context,
+	orgID string,
+) ([]models.OfficeOccupantResponse, error) {
+	if s.Db == nil || s.Db.Redis == nil || orgID == "" {
 		return []models.OfficeOccupantResponse{}, nil
 	}
 
-	ctx := context.Background()
 	cursor := uint64(0)
+	roomsRead := 0
+	occupantsRead := 0
 	hashes := make(map[string]map[string]string)
 
+scan:
 	for {
 		keys, next, err := s.Db.Redis.Scan(
 			ctx,
@@ -323,14 +342,27 @@ func (s *Service) Occupancy(orgID string) ([]models.OfficeOccupantResponse, erro
 			occupancyScanBatch,
 		).Result()
 		if err != nil {
-			return nil, err
+			s.logOccupancyFailure(err)
+			return []models.OfficeOccupantResponse{}, nil
 		}
 
 		for _, key := range keys {
-			values, err := s.Db.Redis.HGetAll(ctx, key).Result()
-			if err != nil {
-				return nil, err
+			if roomsRead >= OccupancyRoomCap ||
+				occupantsRead >= OccupancyEntryCap {
+				break scan
 			}
+			roomsRead++
+
+			values, err := s.readPresenceHash(
+				ctx,
+				key,
+				OccupancyEntryCap-occupantsRead,
+			)
+			if err != nil {
+				s.logOccupancyFailure(err)
+				return []models.OfficeOccupantResponse{}, nil
+			}
+			occupantsRead += len(values)
 			if len(values) > 0 {
 				hashes[key] = values
 			}
@@ -343,6 +375,54 @@ func (s *Service) Occupancy(orgID string) ([]models.OfficeOccupantResponse, erro
 	}
 
 	return MergeOccupants(hashes, time.Now().UTC()), nil
+}
+
+// readPresenceHash reads at most budget fields of one room's presence hash,
+// incrementally, so a room with an unusual number of people cannot load its
+// whole hash into memory.
+func (s *Service) readPresenceHash(
+	ctx context.Context,
+	key string,
+	budget int,
+) (map[string]string, error) {
+	values := make(map[string]string)
+	if budget <= 0 {
+		return values, nil
+	}
+
+	cursor := uint64(0)
+	for {
+		pairs, next, err := s.Db.Redis.HScan(
+			ctx,
+			key,
+			cursor,
+			"*",
+			occupancyHashBatch,
+		).Result()
+		if err != nil {
+			return nil, err
+		}
+
+		for index := 0; index+1 < len(pairs); index += 2 {
+			values[pairs[index]] = pairs[index+1]
+			if len(values) >= budget {
+				return values, nil
+			}
+		}
+
+		if next == 0 {
+			return values, nil
+		}
+		cursor = next
+	}
+}
+
+// logOccupancyFailure records why a building read was abandoned without
+// turning the tower into an error page.
+func (s *Service) logOccupancyFailure(err error) {
+	if s.Logger != nil {
+		s.Logger.Error("failed to read the building occupancy: %v", err)
+	}
 }
 
 // storePresence writes one person's presence into the room's hash.

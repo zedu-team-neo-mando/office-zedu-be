@@ -664,7 +664,7 @@ func (base *Controller) Occupancy(c *gin.Context) {
 		return
 	}
 
-	occupants, err := base.service().Occupancy(requester.OrgID)
+	occupants, err := base.service().Occupancy(c.Request.Context(), requester.OrgID)
 	if err != nil {
 		base.fail(c, "failed to load the building occupancy", err)
 		return

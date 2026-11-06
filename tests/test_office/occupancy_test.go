@@ -1,13 +1,17 @@
 package test_office
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-redis/redis/v8"
+
 	"github.com/hngprojects/telex_be/internal/models"
+	"github.com/hngprojects/telex_be/pkg/repository/storage"
 	"github.com/hngprojects/telex_be/services/office"
 )
 
@@ -171,3 +175,34 @@ func TestMergeOccupantsCapsTheBuilding(t *testing.T) {
 		t.Fatalf("got %d occupants, want the cap of %d", len(got), office.OccupancyEntryCap)
 	}
 }
+
+func TestOccupancyWithoutRedisReturnsAnEmptyBuilding(t *testing.T) {
+	// No Redis client at all is the local and CI-less case: an empty building,
+	// never an error.
+	service := office.New(&storage.Database{}, nil)
+
+	got, err := service.Occupancy(context.Background(), "org_1")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %d occupants, want none", len(got))
+	}
+}
+
+func TestOccupancyWithoutOrganisationSkipsTheRead(t *testing.T) {
+	// The client is configured but points nowhere. An empty organisation must
+	// return before the first command, so this never dials and never errors.
+	client := redis.NewClient(&redis.Options{Addr: "127.0.0.1:0"})
+	t.Cleanup(func() { _ = client.Close() })
+	service := office.New(&storage.Database{Redis: client}, nil)
+
+	got, err := service.Occupancy(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %d occupants, want none", len(got))
+	}
+}
+
