@@ -683,6 +683,22 @@ func (base *Controller) EnterRoom(c *gin.Context) {
 		return
 	}
 
+	var request models.OfficeRoomEnterRequest
+	if c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&request); err != nil {
+			c.JSON(http.StatusBadRequest, utility.BuildErrorResponse(http.StatusBadRequest, "error", "invalid request body", err, nil))
+			return
+		}
+	}
+	if err := base.Validator.Struct(&request); err != nil {
+		c.JSON(http.StatusBadRequest, utility.BuildErrorResponse(http.StatusBadRequest, "error", "invalid presence status", err, nil))
+		return
+	}
+	status := request.Status
+	if status == "" {
+		status = "online"
+	}
+
 	roomID := service.EncodeRoomID(ref.Kind, ref.Ref)
 
 	// A room has a capacity: the focus pod holds one person, a meeting room
@@ -737,7 +753,7 @@ func (base *Controller) EnterRoom(c *gin.Context) {
 		DisplayName: office.DisplayName(requester.OrgID, requester.UserID),
 		Avatar:      avatar,
 		RoomID:      roomID,
-		Status:      "online",
+		Status:      status,
 		Position:    service.RoomCentrePosition(room.Bounds),
 		Rotation:    0,
 		UpdatedAt:   time.Now().UTC(),
@@ -811,6 +827,7 @@ func (base *Controller) UpdatePresence(c *gin.Context) {
 	}
 
 	err = office.UpdatePresence(models.OfficePresenceUpdateCommand{
+		Status:         request.Status,
 		OrganisationID: requester.OrgID,
 		Room:           ref,
 		UserID:         requester.UserID,
