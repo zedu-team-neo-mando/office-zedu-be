@@ -39,13 +39,75 @@ type OfficeChannel struct {
 	Stream     string
 }
 
-// NewChannelTarget builds the channel target of a room.
+// NewChannelTarget builds the channel target of a room from its reference
+// alone. Shared rooms have a fixed floor; a personal office does not, so use
+// RoomTarget (or ChannelTargetForFloor) whenever the owner's floor is
+// available or can be looked up.
 func NewChannelTarget(orgID string, ref models.OfficeRoomRef) OfficeChannelTarget {
+	return ChannelTargetForFloor(orgID, ref, RoomFloorIndex(ref))
+}
+
+// ChannelTargetForFloor builds the channel target of a room listed on a known
+// floor.
+func ChannelTargetForFloor(orgID string, ref models.OfficeRoomRef, floor int) OfficeChannelTarget {
 	return OfficeChannelTarget{
 		OrgID:      orgID,
-		FloorIndex: RoomFloorIndex(ref),
+		FloorIndex: floor,
 		RoomID:     EncodeRoomID(ref.Kind, ref.Ref),
 	}
+}
+
+// RoomTarget builds the channel target of a room the way the directory lists
+// it. A personal office follows its owner's tower floor, which is not part of
+// the reference, so this path reads the stored assignment.
+func (s *Service) RoomTarget(orgID string, ref models.OfficeRoomRef) (OfficeChannelTarget, error) {
+	floor, err := s.RoomFloor(orgID, ref)
+	if err != nil {
+		return OfficeChannelTarget{}, err
+	}
+
+	return ChannelTargetForFloor(orgID, ref, floor), nil
+}
+
+// ChannelTarget resolves the channel a room's announcements belong to. The
+// floor lookup must never drop an announcement: Redis and the database are the
+// source of truth, publishing is best effort, so a failed lookup falls back to
+// the reference-derived channel instead of returning an error.
+func (s *Service) ChannelTarget(orgID string, ref models.OfficeRoomRef) OfficeChannelTarget {
+	target, err := s.RoomTarget(orgID, ref)
+	if err != nil {
+		if s.Logger != nil {
+			s.Logger.Error("failed to resolve the floor of room %s: %v", ref.Ref, err)
+		}
+		return NewChannelTarget(orgID, ref)
+	}
+
+	return target
+}
+
+// RoomFloor returns the floor a room is listed on. Shared rooms have a fixed
+// floor; a personal office sits on its owner's member floor, falling back to
+// the first member floor when the owner has no assignment yet.
+func (s *Service) RoomFloor(orgID string, ref models.OfficeRoomRef) (int, error) {
+	if ref.Kind != models.OfficeRoomKindPersonal {
+		return RoomFloorIndex(ref), nil
+	}
+
+	var row struct {
+		FloorIndex *int
+	}
+	if err := s.Db.Postgresql.Model(&models.OrgUserManagement{}).
+		Select("floor_index").
+		Where("organisation_id = ? AND user_id = ?", orgID, ref.Ref).
+		Scan(&row).Error; err != nil {
+		return 0, err
+	}
+
+	if row.FloorIndex != nil && *row.FloorIndex >= models.OfficeFloorMember {
+		return *row.FloorIndex, nil
+	}
+
+	return models.OfficeFloorMember, nil
 }
 
 // PresenceChannelName returns the Centrifugo channel carrying the presence of

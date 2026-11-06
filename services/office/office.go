@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/hngprojects/telex_be/internal/models"
@@ -74,6 +75,17 @@ func ParseRoomID(roomID string) (models.OfficeRoomRef, error) {
 			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is not a valid area reference", roomID)
 		}
 		return models.OfficeRoomRef{Kind: kind, Ref: ref}, nil
+	case models.OfficeRoomKindPortal:
+		if !found {
+			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is missing its reference", roomID)
+		}
+		floor, ok := ParsePortalRef(ref)
+		if !ok {
+			return models.OfficeRoomRef{}, fmt.Errorf("room id %q is not a valid portal reference", roomID)
+		}
+		// "portal:01" and "portal:1" are the same storey. Keep one identity so
+		// presence, layout overrides and realtime channels cannot split in two.
+		return models.OfficeRoomRef{Kind: kind, Ref: strconv.Itoa(floor)}, nil
 	default:
 		return models.OfficeRoomRef{}, fmt.Errorf("unknown room kind %q", kind)
 	}
@@ -96,6 +108,11 @@ func RoomFloorIndex(ref models.OfficeRoomRef) int {
 			return floor
 		}
 		return models.OfficeFloorMember
+	case models.OfficeRoomKindPortal:
+		if floor, ok := ParsePortalRef(ref.Ref); ok {
+			return floor
+		}
+		return models.OfficeFloorGeneral
 	case models.OfficeRoomKindPersonal:
 		return models.OfficeFloorMember
 	default:
@@ -417,12 +434,16 @@ func (s *Service) AccessSets(orgID, userID string) (AccessSets, error) {
 		}
 	}
 
-	// Group DMs
-	var participantRows []struct{ ChannelID string; UserID string }
+	// Group DMs: the other members of every group the requester belongs to.
+	var groupRows []struct{ UserID string }
 	if err := s.Db.Postgresql.Model(&models.ChannelParticipant{}).
-		Where("org_id = ? AND user_id = ?", orgID, userID).
-		Scan(&participantRows).Error; err == nil {
-		for _, row := range participantRows {
+		Select("DISTINCT user_id").
+		Where("org_id = ? AND user_id <> ?", orgID, userID).
+		Where("channel_id IN (?)", s.Db.Postgresql.Model(&models.ChannelParticipant{}).
+			Select("channel_id").
+			Where("org_id = ? AND user_id = ?", orgID, userID)).
+		Scan(&groupRows).Error; err == nil {
+		for _, row := range groupRows {
 			sets.DMParticipants[row.UserID] = struct{}{}
 		}
 	}

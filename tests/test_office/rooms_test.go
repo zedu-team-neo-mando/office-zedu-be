@@ -22,11 +22,17 @@ func TestParseRoomID(t *testing.T) {
 		{name: "personal", input: "personal:usr_2", wantKind: models.OfficeRoomKindPersonal, wantRef: "usr_2"},
 		{name: "meeting", input: "meeting:3", wantKind: models.OfficeRoomKindMeeting, wantRef: "3"},
 		{name: "focus", input: "focus:1", wantKind: models.OfficeRoomKindFocus, wantRef: "1"},
+		{name: "portal", input: "portal:2", wantKind: models.OfficeRoomKindPortal, wantRef: "2"},
+		{name: "portal with a padded floor", input: "portal:02", wantKind: models.OfficeRoomKindPortal, wantRef: "2"},
+		{name: "portal with a signed floor", input: "portal:+1", wantKind: models.OfficeRoomKindPortal, wantRef: "1"},
 		{name: "url encoded", input: "channel%3Ach_1", wantKind: models.OfficeRoomKindChannel, wantRef: "ch_1"},
 		{name: "empty", input: "", wantError: true},
 		{name: "unknown kind", input: "spaceship:1", wantError: true},
 		{name: "channel without ref", input: "channel", wantError: true},
 		{name: "channel with empty ref", input: "channel:", wantError: true},
+		{name: "portal without ref", input: "portal", wantError: true},
+		{name: "portal with a bad floor", input: "portal:basement", wantError: true},
+		{name: "portal with a negative floor", input: "portal:-1", wantError: true},
 	}
 
 	for _, tc := range cases {
@@ -59,6 +65,52 @@ func TestEncodeRoomID(t *testing.T) {
 	}
 	if got := office.EncodeRoomID(models.OfficeRoomKindLobby, ""); got != "lobby" {
 		t.Fatalf("got %q, want %q", got, "lobby")
+	}
+}
+
+func TestPortalRoomsCarryTheirStorey(t *testing.T) {
+	member := office.PortalRoomRef(models.OfficeFloorMember)
+	if member.Kind != models.OfficeRoomKindPortal || member.Ref != "1" {
+		t.Fatalf("unexpected member portal reference: %+v", member)
+	}
+	if floor := office.RoomFloorIndex(member); floor != models.OfficeFloorMember {
+		t.Fatalf("member portal floor: got %d, want %d", floor, models.OfficeFloorMember)
+	}
+
+	general := office.PortalRoomRef(models.OfficeFloorGeneral)
+	if floor := office.RoomFloorIndex(general); floor != models.OfficeFloorGeneral {
+		t.Fatalf("general portal floor: got %d, want %d", floor, models.OfficeFloorGeneral)
+	}
+
+	if name := office.PortalRoomName(models.OfficeFloorGeneral); name != "Private floors" {
+		t.Fatalf("general portal name: got %q", name)
+	}
+	if name := office.PortalRoomName(models.OfficeFloorMember); name != "Channels" {
+		t.Fatalf("member portal name: got %q", name)
+	}
+}
+
+func TestHasPortalFloor(t *testing.T) {
+	oneFloor := map[string]int{"usr_1": models.OfficeFloorMember}
+	twoFloors := map[string]int{
+		"usr_1": models.OfficeFloorMember,
+		"usr_2": models.OfficeFloorMember + 1,
+	}
+
+	if !office.HasPortalFloor(oneFloor, models.OfficeFloorGeneral) {
+		t.Fatal("the channels floor leads to the member floor")
+	}
+	if !office.HasPortalFloor(oneFloor, models.OfficeFloorMember) {
+		t.Fatal("the member floor carries its own portal")
+	}
+	if office.HasPortalFloor(oneFloor, models.OfficeFloorMember+1) {
+		t.Fatal("a floor above the highest assignment has no portal")
+	}
+	if !office.HasPortalFloor(twoFloors, models.OfficeFloorMember+1) {
+		t.Fatal("the second member floor keeps its portal")
+	}
+	if office.HasPortalFloor(map[string]int{}, models.OfficeFloorGeneral) {
+		t.Fatal("no member floor means no doorway to lead through")
 	}
 }
 

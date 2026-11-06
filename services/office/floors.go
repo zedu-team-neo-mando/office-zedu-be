@@ -92,6 +92,46 @@ func AreaRoomName(key string) string {
 	}
 }
 
+// PortalRoomRef builds the reference of a storey's portal, as "portal:<floor>".
+// A portal is circulation, not a room: it is the doorway between a member floor
+// and the channels floor.
+func PortalRoomRef(floorIndex int) models.OfficeRoomRef {
+	return models.OfficeRoomRef{
+		Kind: models.OfficeRoomKindPortal,
+		Ref:  strconv.Itoa(floorIndex),
+	}
+}
+
+// ParsePortalRef splits "portal:<floor>".
+func ParsePortalRef(ref string) (int, bool) {
+	index, err := strconv.Atoi(strings.TrimSpace(ref))
+	if err != nil || index < models.OfficeFloorGeneral {
+		return 0, false
+	}
+
+	return index, true
+}
+
+// PortalRoomName is what the doorway promises on the other side.
+func PortalRoomName(floorIndex int) string {
+	if floorIndex == models.OfficeFloorGeneral {
+		return "Private floors"
+	}
+
+	return "Channels"
+}
+
+// HasPortalFloor reports whether a storey still carries a portal. The channels
+// floor only leads somewhere while the tower has a member floor, and no storey
+// above the highest assignment gets a doorway when the organisation shrinks.
+func HasPortalFloor(floors map[string]int, floorIndex int) bool {
+	top := highestFloor(floors)
+
+	return top >= models.OfficeFloorMember &&
+		floorIndex >= models.OfficeFloorGeneral &&
+		floorIndex <= top
+}
+
 // AreaRoomsForFloor returns the extras that make a member floor more than a row
 // of desks. The general floor has its own shared rooms and no extras.
 func AreaRoomsForFloor(floorIndex int) []models.OfficeRoomRef {

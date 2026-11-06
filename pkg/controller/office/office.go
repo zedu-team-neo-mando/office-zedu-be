@@ -507,11 +507,16 @@ func (base *Controller) PublishLayout(c *gin.Context) {
 			c.JSON(http.StatusConflict, rd)
 			return
 		}
+		if errors.Is(err, service.ErrLayoutNotFound) {
+			rd := utility.BuildErrorResponse(http.StatusNotFound, "error", "no draft to publish; save a draft first", err, nil)
+			c.JSON(http.StatusNotFound, rd)
+			return
+		}
 		base.fail(c, "failed to publish the layout", err)
 		return
 	}
 
-	office.PublishLayoutUpdate(service.NewChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
+	office.PublishLayoutUpdate(office.ChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
 
 	rd := utility.BuildSuccessResponse(http.StatusOK, "layout published", service.ToResponse(layout))
 	c.JSON(http.StatusOK, rd)
@@ -550,7 +555,7 @@ func (base *Controller) ResetLayout(c *gin.Context) {
 		return
 	}
 
-	office.PublishLayoutUpdate(service.NewChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
+	office.PublishLayoutUpdate(office.ChannelTarget(requester.OrgID, ref), layout.Version, requester.UserID)
 
 	rd := utility.BuildSuccessResponse(http.StatusOK, "room reset", service.ToResponse(layout))
 	c.JSON(http.StatusOK, rd)
@@ -643,6 +648,25 @@ func (base *Controller) Occupants(c *gin.Context) {
 	}
 
 	rd := utility.BuildSuccessResponse(http.StatusOK, "room occupants", occupants)
+	c.JSON(http.StatusOK, rd)
+}
+
+// Occupancy returns everybody standing anywhere in the organisation's building.
+// It is the tower's roster: the building is drawn as a whole, so the client
+// needs every room at once instead of one request per room.
+func (base *Controller) Occupancy(c *gin.Context) {
+	requester, ok := base.authorise(c)
+	if !ok {
+		return
+	}
+
+	occupants, err := base.service().Occupancy(c.Request.Context(), requester.OrgID)
+	if err != nil {
+		base.fail(c, "failed to load the building occupancy", err)
+		return
+	}
+
+	rd := utility.BuildSuccessResponse(http.StatusOK, "building occupancy", occupants)
 	c.JSON(http.StatusOK, rd)
 }
 
@@ -744,7 +768,7 @@ func (base *Controller) EnterRoom(c *gin.Context) {
 		return
 	}
 
-	target := service.NewChannelTarget(requester.OrgID, ref)
+	target := service.ChannelTargetForFloor(requester.OrgID, ref, room.FloorIndex)
 	payload := map[string]any{
 		"roomId":   roomID,
 		"presence": presence,
@@ -897,6 +921,12 @@ func (base *Controller) SaveAvatar(c *gin.Context) {
 	if err := c.ShouldBindJSON(&request); err != nil {
 		rd := utility.BuildErrorResponse(http.StatusBadRequest, "error", "invalid request body", err, nil)
 		c.JSON(http.StatusBadRequest, rd)
+		return
+	}
+
+	if err := base.Validator.Struct(&request); err != nil {
+		rd := utility.BuildErrorResponse(http.StatusUnprocessableEntity, "error", "validation failed", utility.ValidationResponse(err, base.Validator), nil)
+		c.JSON(http.StatusUnprocessableEntity, rd)
 		return
 	}
 

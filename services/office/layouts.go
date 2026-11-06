@@ -231,16 +231,17 @@ func (s *Service) Publish(command models.OfficeLayoutCommand) (*models.OfficeLay
 		return nil, ErrVersionConflict
 	}
 
-	payload := models.OfficeLayoutPayload{
-		Grid:  models.OfficeGrid{Width: int(OfficeBuildingWidth), Height: int(OfficeBuildingHeight), Tile: OfficeTileSize},
-		Items: []models.OfficeFurnitureItem{},
-	}
-	if draft, err := s.GetDraft(command.OrganisationID, ref, command.ActorID); err != nil {
+	draft, err := s.GetDraft(command.OrganisationID, ref, command.ActorID)
+	if err != nil {
 		return nil, err
-	} else if draft != nil {
-		payload = draft.Layout
 	}
-	command.Payload = payload
+	if draft == nil {
+		// Publishing starts from the draft the admin saved. Replacing the live
+		// layout with an empty one just because no draft exists would wipe
+		// every client's furniture.
+		return nil, ErrLayoutNotFound
+	}
+	command.Payload = draft.Layout
 
 	published, err := s.replacePublished(command)
 	if err != nil {
