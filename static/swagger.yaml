@@ -557,14 +557,18 @@ paths:
         "200":
           description: >
             user sign in successfully. Same body as /auth/login, plus
-            data.zedu_connect_url, zedu-be's Centrifugo websocket (empty
-            until it is configured; the web app then polls instead).
+            data.zedu_connect_url, the address of zedu-be's Centrifugo
+            websocket, so the web app receives zedu messages live.
+        "400":
+          description: the request body is not valid JSON
         "401":
           description: zedu rejected the session token
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/UnauthorizedErrorSchema"
+        "403":
+          description: the office account for this zedu user is deactivated
         "409":
           description: the zedu account has no current organisation
         "422":
@@ -575,6 +579,10 @@ paths:
                 $ref: "#/components/schemas/UnprocessedEntityErrorSchema"
         "502":
           description: zedu-be could not be reached or gave an unusable answer
+        "503":
+          description: >
+            the organisation's roles and owner could not be confirmed with
+            zedu yet, so no session is issued; try again shortly
 
   /auth/change-password:
     put:
