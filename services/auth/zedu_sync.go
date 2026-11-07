@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	"github.com/gofrs/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -22,6 +23,10 @@ const (
 	zeduSyncInterval = 5 * time.Minute
 	zeduPageLimit    = 100
 	zeduMaxPages     = 50
+
+	// zeduSyncClaimTimeout bounds the claim, which runs on the sign-in path: a
+	// Redis that cannot answer quickly must not hold up a login.
+	zeduSyncClaimTimeout = 500 * time.Millisecond
 )
 
 // ZeduSyncJob copies one zedu organisation's members, roles, channels and
@@ -63,7 +68,17 @@ type memberSpec struct {
 }
 
 func startZeduSync(deps ZeduLoginDeps, job ZeduSyncJob) {
-	if !claimZeduSync(job.OrgID) {
+	claimed, err := claimZeduSync(zeduSyncClient(), job.OrgID)
+	if err != nil {
+		// A claim that cannot be read is not a claim that was taken: running
+		// anyway lets two syncs overlap, and the older snapshot that finishes
+		// last can deactivate a colleague the newer one just added. Skipping
+		// only delays the organisation's refresh; the signing-in user's own
+		// account and membership are mirrored by the sign-in itself.
+		deps.Logger.Error("zedu sync skipped: the sync claim failed", job.OrgID, err.Error())
+		return
+	}
+	if !claimed {
 		return
 	}
 
@@ -81,14 +96,27 @@ func startZeduSync(deps ZeduLoginDeps, job ZeduSyncJob) {
 	}()
 }
 
-// claimZeduSync lets one sync per organisation run every zeduSyncInterval
-// across all instances. Without Redis every login syncs.
-func claimZeduSync(orgID string) bool {
-	if storage.DB == nil || storage.DB.Redis == nil {
-		return true
+// zeduSyncClient is the process-wide Redis client, or nil when the deployment
+// has no Redis.
+func zeduSyncClient() *redis.Client {
+	if storage.DB == nil {
+		return nil
 	}
-	claimed, err := storage.DB.Redis.SetNX(context.Background(), "office:zedu-sync:"+orgID, 1, zeduSyncInterval).Result()
-	return err != nil || claimed
+	return storage.DB.Redis
+}
+
+// claimZeduSync takes the organisation's sync slot for zeduSyncInterval across
+// all instances, and reports whether this caller holds it. A nil client means no
+// Redis, so every login syncs. An error fails closed: a sync that cannot prove it
+// is alone must not run the deactivation pass.
+func claimZeduSync(client *redis.Client, orgID string) (bool, error) {
+	if client == nil {
+		return true, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), zeduSyncClaimTimeout)
+	defer cancel()
+	return client.SetNX(ctx, "office:zedu-sync:"+orgID, 1, zeduSyncInterval).Result()
 }
 
 func SyncZeduOrg(deps ZeduLoginDeps, job ZeduSyncJob) error {
@@ -168,19 +196,89 @@ func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisati
 	}
 
 	if complete && len(people) > 0 {
-		keep := make([]string, 0, len(people))
-		for _, person := range people {
-			keep = append(keep, person.ID)
-		}
-		err := deps.Db.Model(&models.OrgUserManagement{}).
-			Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", org.ID, false, keep).
-			Update("is_deactivated", true).Error
-		if err != nil {
-			return zeduMembers{People: people, Complete: complete}, fmt.Errorf("deactivating departed members: %w", err)
+		if err := deactivateDeparted(deps, job, org, people); err != nil {
+			return zeduMembers{People: people, Complete: complete}, err
 		}
 	}
 
 	return zeduMembers{People: people, Complete: complete}, nil
+}
+
+// deactivateDeparted deactivates the members this sync no longer sees. It is the
+// one destructive step of a sync, so it only acts when a second read of the
+// member list agrees nobody is missing: two syncs can overlap (the claim is best
+// effort, and a deployment without Redis syncs on every login), and the sync
+// holding the older snapshot may reach this point after a newer one has already
+// added someone.
+func deactivateDeparted(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation, people map[string]officePerson) error {
+	var candidates int64
+	err := deps.Db.Model(&models.OrgUserManagement{}).
+		Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", org.ID, false, officeIDs(people)).
+		Count(&candidates).Error
+	if err != nil {
+		return fmt.Errorf("looking for departed members: %w", err)
+	}
+	// Nobody is missing from this sync's own snapshot, so a second read has
+	// nothing to add and there is no reason to spend one.
+	if candidates == 0 {
+		return nil
+	}
+
+	if err := mergeLatecomers(deps, job, people); err != nil {
+		// Proving a departure needs that second read; without it, leave every
+		// membership alone and let the next sync try.
+		deps.Logger.Error("zedu sync skipped deactivating members", job.OrgID, err.Error())
+		return nil
+	}
+
+	if err := deps.Db.Model(&models.OrgUserManagement{}).
+		Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", org.ID, false, officeIDs(people)).
+		Update("is_deactivated", true).Error; err != nil {
+		return fmt.Errorf("deactivating departed members: %w", err)
+	}
+	return nil
+}
+
+// mergeLatecomers reads the member list again and adds everyone this sync's own
+// snapshot did not have, so a colleague who joined in the meantime is kept
+// instead of deactivated by the older sync.
+func mergeLatecomers(deps ZeduLoginDeps, job ZeduSyncJob, people map[string]officePerson) error {
+	fresh, err := readZeduMembers(deps, job.Token, job.OrgID)
+	if err != nil {
+		return fmt.Errorf("re-reading zedu members: %w", err)
+	}
+
+	for _, member := range fresh {
+		if member.EntityType == "bot" || member.IsDeactivated || strings.TrimSpace(member.Email) == "" {
+			continue
+		}
+		if _, ok := people[member.ID]; ok {
+			continue
+		}
+
+		var user models.User
+		err := deps.Db.Preload("Profile").
+			Where("email = ?", strings.ToLower(strings.TrimSpace(member.Email))).
+			First(&user).Error
+		switch {
+		case err == nil:
+			people[member.ID] = officePerson{ID: user.ID, Username: user.Profile.UserName}
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			// No office account yet, so there is no membership or channel row
+			// to remove on their behalf.
+		default:
+			return fmt.Errorf("reading the office account for %s: %w", member.Email, err)
+		}
+	}
+	return nil
+}
+
+func officeIDs(people map[string]officePerson) []string {
+	ids := make([]string, 0, len(people))
+	for _, person := range people {
+		ids = append(ids, person.ID)
+	}
+	return ids
 }
 
 // syncZeduChannels mirrors the channels the caller can see in zedu, under their

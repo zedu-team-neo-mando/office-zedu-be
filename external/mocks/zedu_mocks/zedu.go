@@ -3,6 +3,8 @@ package zedu_mocks
 import (
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"github.com/gofrs/uuid"
 
@@ -22,9 +24,22 @@ const ColleagueTokenPrefix = "zedu-colleague:"
 // ColleagueTokenPrefix, but the organisation's member list cannot be read.
 const UnreadableMembersTokenPrefix = "zedu-unreadable-members:"
 
+// StaleMemberListTokenPrefix signs in as the organisation's owner, but the first
+// member list it returns predates the colleague: the snapshot an older sync
+// holds while a newer one has already mirrored the colleague.
+const StaleMemberListTokenPrefix = "zedu-stale-members:"
+
+// memberReads counts the member lists handed out per token.
+var memberReads sync.Map
+
+func memberReadNumber(token string) int32 {
+	counter, _ := memberReads.LoadOrStore(token, new(int32))
+	return atomic.AddInt32(counter.(*int32), 1)
+}
+
 // emailFromToken returns the owner email the mock organisation is keyed by.
 func emailFromToken(token string) (string, bool) {
-	for _, prefix := range []string{ValidTokenPrefix, ColleagueTokenPrefix, UnreadableMembersTokenPrefix} {
+	for _, prefix := range []string{ValidTokenPrefix, ColleagueTokenPrefix, UnreadableMembersTokenPrefix, StaleMemberListTokenPrefix} {
 		if email, ok := strings.CutPrefix(token, prefix); ok && email != "" {
 			return strings.ToLower(email), true
 		}
@@ -86,12 +101,18 @@ func FetchOrgMembers(data any) (external_models.ZeduOrgMembersPage, error) {
 	}
 
 	colleague := ColleagueEmail(email)
+	members := []external_models.ZeduOrgMember{
+		{ID: UserID(email), Email: email, UserName: "mock_owner", Name: "Mock Owner", Role: "Owner", EntityType: "user"},
+		{ID: UserID(colleague), Email: colleague, UserName: "mock_colleague", Name: "Mock Colleague", Role: "User", EntityType: "user"},
+		{ID: stableID("bot", email), Email: "bot." + email, Name: "Mock Bot", Role: "Bot", EntityType: "bot"},
+	}
+	// The first list a stale token sees is from before the colleague joined.
+	if strings.HasPrefix(req.Token, StaleMemberListTokenPrefix) && memberReadNumber(req.Token) == 1 {
+		members = []external_models.ZeduOrgMember{members[0], members[2]}
+	}
+
 	return external_models.ZeduOrgMembersPage{
-		Data: []external_models.ZeduOrgMember{
-			{ID: UserID(email), Email: email, UserName: "mock_owner", Name: "Mock Owner", Role: "Owner", EntityType: "user"},
-			{ID: UserID(colleague), Email: colleague, UserName: "mock_colleague", Name: "Mock Colleague", Role: "User", EntityType: "user"},
-			{ID: stableID("bot", email), Email: "bot." + email, Name: "Mock Bot", Role: "Bot", EntityType: "bot"},
-		},
+		Data:       members,
 		Pagination: external_models.ZeduPagination{CurrentPage: 1, TotalPages: 1},
 	}, nil
 }
