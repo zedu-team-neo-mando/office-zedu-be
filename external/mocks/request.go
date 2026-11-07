@@ -6,6 +6,7 @@ import (
 
 	"github.com/hngprojects/telex_be/external/external_models"
 	"github.com/hngprojects/telex_be/external/mocks/ipstack_mocks"
+	"github.com/hngprojects/telex_be/external/mocks/zedu_mocks"
 	"github.com/hngprojects/telex_be/utility"
 )
 
@@ -35,6 +36,14 @@ func (er ExternalRequest) SendExternalRequest(name string, data any) (any, error
 	switch name {
 	case "ipinfo_resolve_ip":
 		return ipstack_mocks.IpinfoResolveIp(er.Logger, data)
+	case "zedu_fetch_me":
+		return zedu_mocks.FetchMe(data)
+	case "zedu_fetch_org_members":
+		return zedu_mocks.FetchOrgMembers(data)
+	case "zedu_fetch_org_channels":
+		return zedu_mocks.FetchOrgChannels(data)
+	case "zedu_fetch_channel_members":
+		return zedu_mocks.FetchChannelMembers(data)
 	default:
 		return nil, fmt.Errorf("request not found")
 	}

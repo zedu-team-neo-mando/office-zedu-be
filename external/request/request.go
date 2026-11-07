@@ -10,6 +10,7 @@ import (
 	"github.com/hngprojects/telex_be/external/thirdparty/ipstack"
 	"github.com/hngprojects/telex_be/external/thirdparty/openrouter"
 	"github.com/hngprojects/telex_be/external/thirdparty/slack"
+	"github.com/hngprojects/telex_be/external/thirdparty/zedu"
 	"github.com/hngprojects/telex_be/internal/config"
 	"github.com/hngprojects/telex_be/utility"
 )
@@ -31,6 +32,10 @@ var (
 	GetChatCompletions  string = "get_open_router_chat_completions"
 	GetAllModels        string = "get_all_models"
 	SendAgentAPIKey     string = "send_agent_api_key"
+	ZeduFetchMe         string = "zedu_fetch_me"
+	ZeduFetchOrgMembers string = "zedu_fetch_org_members"
+	ZeduFetchChannels   string = "zedu_fetch_org_channels"
+	ZeduFetchChanUsers  string = "zedu_fetch_channel_members"
 )
 
 func (er ExternalRequest) SendExternalRequest(name string, data any) (any, error) {
@@ -151,6 +156,18 @@ func (er ExternalRequest) SendExternalRequest(name string, data any) (any, error
 				Timeout:      true,
 			}
 			return obj.GetAllModels()
+		case ZeduFetchMe:
+			token, _ := data.(string)
+			return zedu.Client{BaseUrl: zedu.ApiUrl}.FetchMe(token)
+		case ZeduFetchOrgMembers:
+			req, _ := data.(external_models.ZeduPageRequest)
+			return zedu.Client{BaseUrl: zedu.ApiUrl}.FetchOrgMembers(req)
+		case ZeduFetchChannels:
+			req, _ := data.(external_models.ZeduPageRequest)
+			return zedu.Client{BaseUrl: zedu.ApiUrl}.FetchOrgChannels(req)
+		case ZeduFetchChanUsers:
+			req, _ := data.(external_models.ZeduPageRequest)
+			return zedu.Client{BaseUrl: zedu.ApiUrl}.FetchChannelMembers(req)
 		default:
 			return nil, fmt.Errorf("request not found")
 		}
