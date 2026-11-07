@@ -68,7 +68,7 @@ type memberSpec struct {
 }
 
 func startZeduSync(deps ZeduLoginDeps, job ZeduSyncJob) {
-	claimed, err := claimZeduSync(zeduSyncClient(), job.OrgID)
+	claimed, err := ClaimZeduSync(zeduSyncClient(), job.OrgID)
 	if err != nil {
 		// A claim that cannot be read is not a claim that was taken: running
 		// anyway lets two syncs overlap, and the older snapshot that finishes
@@ -109,7 +109,7 @@ func zeduSyncClient() *redis.Client {
 // all instances, and reports whether this caller holds it. A nil client means no
 // Redis, so every login syncs. An error fails closed: a sync that cannot prove it
 // is alone must not run the deactivation pass.
-func claimZeduSync(client *redis.Client, orgID string) (bool, error) {
+func ClaimZeduSync(client *redis.Client, orgID string) (bool, error) {
 	if client == nil {
 		return true, nil
 	}
@@ -196,7 +196,7 @@ func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisati
 	}
 
 	if complete && len(people) > 0 {
-		if err := deactivateDeparted(deps, job, org, people); err != nil {
+		if err := deactivateDeparted(deps, job, people); err != nil {
 			return zeduMembers{People: people, Complete: complete}, err
 		}
 	}
@@ -210,10 +210,10 @@ func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisati
 // effort, and a deployment without Redis syncs on every login), and the sync
 // holding the older snapshot may reach this point after a newer one has already
 // added someone.
-func deactivateDeparted(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation, people map[string]officePerson) error {
+func deactivateDeparted(deps ZeduLoginDeps, job ZeduSyncJob, people map[string]officePerson) error {
 	var candidates int64
 	err := deps.Db.Model(&models.OrgUserManagement{}).
-		Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", org.ID, false, officeIDs(people)).
+		Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", job.OrgID, false, officeIDs(people)).
 		Count(&candidates).Error
 	if err != nil {
 		return fmt.Errorf("looking for departed members: %w", err)
@@ -232,7 +232,7 @@ func deactivateDeparted(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organis
 	}
 
 	if err := deps.Db.Model(&models.OrgUserManagement{}).
-		Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", org.ID, false, officeIDs(people)).
+		Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", job.OrgID, false, officeIDs(people)).
 		Update("is_deactivated", true).Error; err != nil {
 		return fmt.Errorf("deactivating departed members: %w", err)
 	}
