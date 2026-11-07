@@ -64,6 +64,12 @@ type CreateOrgRequestModel struct {
 	Country     string `json:"country" validate:"required"`
 	LogoURL     string `json:"logo_url" `
 	Plan        string `json:"plan"`
+
+	// Set only by the zedu sync, never from a request body: a mirrored org
+	// keeps its zedu ID and gets its channels from zedu instead of a fresh
+	// "general" channel.
+	ID                 string `json:"-"`
+	SkipDefaultChannel bool   `json:"-"`
 }
 
 type UpdateOrgRequestModel struct {

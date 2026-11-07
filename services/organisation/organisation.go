@@ -39,7 +39,10 @@ func ValidateCreateOrgRequest(req models.CreateOrgRequestModel, db *gorm.DB) (mo
 
 func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId string, logger *utility.Logger) (*models.Organisation, error) {
 
-	orgId := utility.GenerateUUID()
+	orgId := req.ID
+	if orgId == "" {
+		orgId = utility.GenerateUUID()
+	}
 	file, ext, err := utility.ValidatePicture(req.LogoURL)
 
 	if err != nil {
@@ -127,51 +130,13 @@ func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId st
 		return nil, err
 	}
 
-
-	channel := models.Channels{
-		ID:             utility.GenerateUUID(),
-		Name:           "general",
-		Description:    fmt.Sprintf("%s's general channel", org.Name),
-		OwnerId:        user.ID,
-		OrganisationID: org.ID,
-	}
-
-	var joinChannelsReq models.JoinChannelsRequest
-
-	joinChannelsReq.ChannelsID = channel.ID
-	joinChannelsReq.UserID = userId
-	joinChannelsReq.Username = user.Profile.UserName
-
-	err = channel.CreateChannel(db)
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = channel.AddUserToChannel(db, joinChannelsReq)
-	if err != nil {
-		return nil, err
-	}
-
-	webhook := models.Webhook{
-		ID:          utility.GenerateUUID(),
-		ChannelId:   channel.ID,
-		OwnerId:     userId,
-		Status:      "active",
-		WebhookName: fmt.Sprintf("%s's webhook", channel.Name),
+	if !req.SkipDefaultChannel {
+		if err = createGeneralChannel(db, &org, &user); err != nil {
+			return nil, err
+		}
 	}
 
 	org.OrganisationSlug = slug.Make(req.Name)
-
-	slugId := channel.ID
-	webhookUrl := config.Config.App.WebhookApiUrl + fmt.Sprintf("/v1/webhooks/%s", slugId)
-	webhook.WebhookSlug = slugId
-	webhook.WebhookUrl = webhookUrl
-
-	err = webhook.CreateWebhook(db)
-
-	if err != nil {
-		return nil, err
-	}
 
 	err = CreateOrgUserManagement(db, user.ID, org.ID)
 	if err != nil {
@@ -188,6 +153,42 @@ func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId st
 	orgResp.OrganisationSlug = slug.Make(orgResp.Name)
 
 	return &orgResp, nil
+}
+
+func createGeneralChannel(db *gorm.DB, org *models.Organisation, user *models.User) error {
+	channel := models.Channels{
+		ID:             utility.GenerateUUID(),
+		Name:           "general",
+		Description:    fmt.Sprintf("%s's general channel", org.Name),
+		OwnerId:        user.ID,
+		OrganisationID: org.ID,
+	}
+
+	joinChannelsReq := models.JoinChannelsRequest{
+		ChannelsID: channel.ID,
+		UserID:     user.ID,
+		Username:   user.Profile.UserName,
+	}
+
+	if err := channel.CreateChannel(db); err != nil {
+		return err
+	}
+
+	if _, err := channel.AddUserToChannel(db, joinChannelsReq); err != nil {
+		return err
+	}
+
+	webhook := models.Webhook{
+		ID:          utility.GenerateUUID(),
+		ChannelId:   channel.ID,
+		OwnerId:     user.ID,
+		Status:      "active",
+		WebhookName: fmt.Sprintf("%s's webhook", channel.Name),
+		WebhookSlug: channel.ID,
+		WebhookUrl:  config.Config.App.WebhookApiUrl + fmt.Sprintf("/v1/webhooks/%s", channel.ID),
+	}
+
+	return webhook.CreateWebhook(db)
 }
 
 func GetOrganisation(orgId string, userId string, db *gorm.DB) (*models.Organisation, error) {
