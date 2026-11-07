@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
 
+	"github.com/hngprojects/telex_be/external/external_models"
 	"github.com/hngprojects/telex_be/external/mocks/zedu_mocks"
 	"github.com/hngprojects/telex_be/external/request"
 	"github.com/hngprojects/telex_be/internal/models"
@@ -213,5 +214,26 @@ func TestZeduLoginByAMemberDoesNotMakeThemOwner(t *testing.T) {
 	}
 	if membership.RoleID == ownerRole.ID {
 		t.Errorf("the first member to sign in must not keep the Owner role")
+	}
+}
+
+func TestZeduPaginationReadsTotalPages(t *testing.T) {
+	// zedu-be's member and channel lists name the page count total_pages.
+	body := `{"data":[],"pagination":{"current_page":1,"total_pages":3}}`
+
+	var channels external_models.ZeduChannelsPage
+	if err := json.Unmarshal([]byte(body), &channels); err != nil {
+		t.Fatalf("decoding a channel page: %v", err)
+	}
+	if channels.Pagination.TotalPages != 3 {
+		t.Errorf("expected 3 pages, got %d", channels.Pagination.TotalPages)
+	}
+
+	var members external_models.ZeduOrgMembersPage
+	if err := json.Unmarshal([]byte(body), &members); err != nil {
+		t.Fatalf("decoding a member page: %v", err)
+	}
+	if members.Pagination.TotalPages != 3 {
+		t.Errorf("expected 3 pages, got %d", members.Pagination.TotalPages)
 	}
 }
