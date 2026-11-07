@@ -27,6 +27,11 @@ const (
 	// zeduSyncClaimTimeout bounds the claim, which runs on the sign-in path: a
 	// Redis that cannot answer quickly must not hold up a login.
 	zeduSyncClaimTimeout = 500 * time.Millisecond
+
+	// zeduSyncGenerationTTL keeps an organisation's sync counter well past any
+	// one sync. If it lapses mid-sync, the next sync restarts it, the older one
+	// no longer finds its own number, and it still steps aside.
+	zeduSyncGenerationTTL = time.Hour
 )
 
 // ZeduSyncJob copies one zedu organisation's members, roles, channels and
@@ -36,6 +41,10 @@ type ZeduSyncJob struct {
 	OrgID       string
 	OwnerZeduID string
 	CallerID    string
+
+	// generation is this sync's number from BeginZeduSync: zero without Redis,
+	// negative when Redis could not hand one out.
+	generation int64
 }
 
 // zeduMembers is the result of a member sync: the office account of every
@@ -119,9 +128,79 @@ func ClaimZeduSync(client *redis.Client, orgID string) (bool, error) {
 	return client.SetNX(ctx, "office:zedu-sync:"+orgID, 1, zeduSyncInterval).Result()
 }
 
+// zeduSyncGenerationKey names the counter that numbers an organisation's syncs.
+func zeduSyncGenerationKey(orgID string) string {
+	return "office:zedu-sync-gen:" + orgID
+}
+
+// BeginZeduSync gives a sync the next generation number for its organisation.
+// The five-minute claim only limits how often syncs start; two can still
+// overlap when one runs past it, and the generation lets the older one tell.
+// Zero means there is no Redis to coordinate through.
+func BeginZeduSync(client *redis.Client, orgID string) (int64, error) {
+	if client == nil {
+		return 0, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), zeduSyncClaimTimeout)
+	defer cancel()
+	key := zeduSyncGenerationKey(orgID)
+	generation, err := client.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	if err := client.Expire(ctx, key, zeduSyncGenerationTTL).Err(); err != nil {
+		return 0, err
+	}
+	return generation, nil
+}
+
+// ZeduSyncSuperseded reports whether a newer sync of the organisation started
+// after the one holding generation. Without Redis (generation zero) there is
+// nothing to compare, so a sync is never superseded.
+func ZeduSyncSuperseded(client *redis.Client, orgID string, generation int64) (bool, error) {
+	if client == nil || generation == 0 {
+		return false, nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), zeduSyncClaimTimeout)
+	defer cancel()
+	latest, err := client.Get(ctx, zeduSyncGenerationKey(orgID)).Int64()
+	if errors.Is(err, redis.Nil) {
+		// The counter lapsed, so this sync's number can no longer be confirmed.
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return latest != generation, nil
+}
+
+// mayRemove reports whether this sync is still its organisation's latest, so
+// its removals cannot undo what a newer sync just mirrored. Additions are always
+// safe; removals wait for the next sync whenever this cannot be confirmed.
+func (job ZeduSyncJob) mayRemove(deps ZeduLoginDeps) bool {
+	if job.generation < 0 {
+		return false
+	}
+	superseded, err := ZeduSyncSuperseded(zeduSyncClient(), job.OrgID, job.generation)
+	if err != nil {
+		deps.Logger.Error("zedu sync skipped its removals: the sync generation could not be read", job.OrgID, err.Error())
+		return false
+	}
+	return !superseded
+}
+
 func SyncZeduOrg(deps ZeduLoginDeps, job ZeduSyncJob) error {
+	generation, err := BeginZeduSync(zeduSyncClient(), job.OrgID)
+	if err != nil {
+		deps.Logger.Error("zedu sync will not remove anything: no sync generation", job.OrgID, err.Error())
+		generation = -1
+	}
+	job.generation = generation
+
 	var org models.Organisation
-	org, err := org.GetOrgByID(deps.Db, job.OrgID)
+	org, err = org.GetOrgByID(deps.Db, job.OrgID)
 	if err != nil {
 		return err
 	}
@@ -231,6 +310,9 @@ func deactivateDeparted(deps ZeduLoginDeps, job ZeduSyncJob, people map[string]o
 		return nil
 	}
 
+	if !job.mayRemove(deps) {
+		return nil
+	}
 	if err := deps.Db.Model(&models.OrgUserManagement{}).
 		Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", job.OrgID, false, officeIDs(people)).
 		Update("is_deactivated", true).Error; err != nil {
@@ -331,8 +413,10 @@ func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, members zeduMembers) 
 	// The caller only sees the private channels they are in, so a private
 	// channel missing from the list may still exist; only public ones that
 	// zedu no longer lists are archived. An empty list is not taken as proof
-	// that every channel is gone: it is more likely a read that went wrong.
-	if !complete || len(listed) == 0 {
+	// that every channel is gone: it is more likely a read that went wrong. A
+	// sync overtaken by a newer one leaves archiving to it, since its list may
+	// predate a channel the newer sync just mirrored.
+	if !complete || len(listed) == 0 || !job.mayRemove(deps) {
 		return nil
 	}
 	return deps.Db.Model(&models.Channels{}).
@@ -392,8 +476,9 @@ func (m zeduMembers) syncChannel(deps ZeduLoginDeps, job ZeduSyncJob, channelID 
 
 	// Removing anyone needs a complete member sync: a colleague who could not
 	// be prepared is missing from the list without having left the channel.
-	// Nobody matched also means the member sync fell short.
-	if !m.Complete || len(keep) == 0 {
+	// Nobody matched also means the member sync fell short. An overtaken sync
+	// leaves removals to the newer one.
+	if !m.Complete || len(keep) == 0 || !job.mayRemove(deps) {
 		return nil
 	}
 	return deps.Db.Where("channels_id = ? AND user_id NOT IN ?", channelID, keep).Delete(&models.UserChannels{}).Error
