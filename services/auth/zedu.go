@@ -99,9 +99,18 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 		OwnerZeduID: zeduUser.Organisation.OwnerID,
 		CallerID:    user.ID,
 	}
-	if org.OwnerID == user.ID && zeduUser.ID != zeduUser.Organisation.OwnerID {
-		if err := settleZeduOwnership(deps, job, &org); err != nil {
-			return nil, http.StatusServiceUnavailable, err
+	// Ownership is checked by owner_id and by role: an earlier sign-in can have
+	// corrected one and not the other. A zedu co-owner holds the Owner role
+	// legitimately and is simply re-confirmed.
+	if zeduUser.ID != zeduUser.Organisation.OwnerID {
+		owns, err := holdsOfficeOwnership(deps.Db, org, user.ID)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		if owns {
+			if err := settleZeduOwnership(deps, job, &org); err != nil {
+				return nil, http.StatusServiceUnavailable, err
+			}
 		}
 	}
 
