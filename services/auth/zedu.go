@@ -119,7 +119,7 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 		return nil, http.StatusInternalServerError, err
 	}
 	// Channel rooms read zedu's own conversation, so the web app subscribes to
-	// zedu's realtime server; empty means it falls back to polling.
+	// zedu's realtime server.
 	responseData["zedu_connect_url"] = zedu.ConnectUrl
 
 	startZeduSync(deps, job)
