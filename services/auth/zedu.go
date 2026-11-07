@@ -72,6 +72,9 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 	if err != nil {
 		return nil, http.StatusInternalServerError, fmt.Errorf("could not prepare the office account: %w", err)
 	}
+	if user.Deactivated {
+		return nil, http.StatusForbidden, errors.New("this office account has been deactivated")
+	}
 
 	org, err := ensureZeduOrg(deps, zeduUser.Organisation, user.ID)
 	if err != nil {
