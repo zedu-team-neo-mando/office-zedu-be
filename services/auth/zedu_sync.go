@@ -32,6 +32,14 @@ type ZeduSyncJob struct {
 	CallerID    string
 }
 
+// zeduMembers is the result of a member sync: the office account of every
+// synced member, keyed by zedu user ID, and whether every member was read and
+// prepared. Removals are only safe from a complete read.
+type zeduMembers struct {
+	People   map[string]officePerson
+	Complete bool
+}
+
 type officePerson struct {
 	ID       string
 	Username string
@@ -78,18 +86,18 @@ func SyncZeduOrg(deps ZeduLoginDeps, job ZeduSyncJob) error {
 		return err
 	}
 
-	people, err := syncZeduMembers(deps, job, &org)
+	members, err := syncZeduMembers(deps, job, &org)
 	if err != nil {
 		return err
 	}
 
-	return syncZeduChannels(deps, job, people)
+	return syncZeduChannels(deps, job, members)
 }
 
-// syncZeduMembers returns the office account of every synced member, keyed by
-// zedu user ID. Members who are gone from zedu are deactivated, but only after
-// a complete read, so a failed page never locks people out.
-func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation) (map[string]officePerson, error) {
+// syncZeduMembers mirrors the organisation's zedu members into the office.
+// Members who are gone from zedu are deactivated, but only after a complete
+// read, so a failed page never locks people out.
+func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation) (zeduMembers, error) {
 	members, err := collectZeduPages(func(page int) ([]external_models.ZeduOrgMember, int, error) {
 		resp, err := deps.ExtReq.SendExternalRequest(request.ZeduFetchOrgMembers, pageRequest(job.Token, job.OrgID, page))
 		if err != nil {
@@ -99,7 +107,7 @@ func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisati
 		return result.Data, result.Pagination.TotalPagesCount, nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("reading zedu members: %w", err)
+		return zeduMembers{}, fmt.Errorf("reading zedu members: %w", err)
 	}
 
 	roles := map[string]string{}
@@ -149,17 +157,17 @@ func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisati
 			Where("organisation_id = ? AND is_deactivated = ? AND user_id NOT IN ?", org.ID, false, keep).
 			Update("is_deactivated", true).Error
 		if err != nil {
-			return people, fmt.Errorf("deactivating departed members: %w", err)
+			return zeduMembers{People: people, Complete: complete}, fmt.Errorf("deactivating departed members: %w", err)
 		}
 	}
 
-	return people, nil
+	return zeduMembers{People: people, Complete: complete}, nil
 }
 
 // syncZeduChannels mirrors the channels the caller can see in zedu, under their
 // zedu IDs, so the office web app can read and send their messages through
 // zedu-be with the same room ID.
-func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, people map[string]officePerson) error {
+func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, members zeduMembers) error {
 	channels, err := collectZeduPages(func(page int) ([]external_models.ZeduChannel, int, error) {
 		resp, err := deps.ExtReq.SendExternalRequest(request.ZeduFetchChannels, pageRequest(job.Token, job.OrgID, page))
 		if err != nil {
@@ -180,7 +188,7 @@ func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, people map[string]off
 		}
 
 		owner := job.CallerID
-		if person, ok := people[channel.OwnerID]; ok {
+		if person, ok := members.People[channel.OwnerID]; ok {
 			owner = person.ID
 		}
 		if err := upsertZeduChannel(deps.Db, job.OrgID, channel, owner); err != nil {
@@ -190,23 +198,22 @@ func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, people map[string]off
 		}
 		listed = append(listed, channel.ID)
 
-		if err := syncZeduChannelMembers(deps, job, channel.ID, people); err != nil {
+		if err := members.syncChannel(deps, job, channel.ID); err != nil {
 			deps.Logger.Error("zedu sync could not mirror channel members", channel.ID, err.Error())
 		}
 	}
 
 	// The caller only sees the private channels they are in, so a private
 	// channel missing from the list may still exist; only public ones that
-	// zedu no longer lists are archived.
-	if !complete {
+	// zedu no longer lists are archived. An empty list is not taken as proof
+	// that every channel is gone: it is more likely a read that went wrong.
+	if !complete || len(listed) == 0 {
 		return nil
 	}
-	query := deps.Db.Model(&models.Channels{}).
-		Where("organisation_id = ? AND is_private = ? AND archived = ?", job.OrgID, false, false)
-	if len(listed) > 0 {
-		query = query.Where("id NOT IN ?", listed)
-	}
-	return query.Update("archived", true).Error
+	return deps.Db.Model(&models.Channels{}).
+		Where("organisation_id = ? AND is_private = ? AND archived = ?", job.OrgID, false, false).
+		Where("id NOT IN ?", listed).
+		Update("archived", true).Error
 }
 
 func upsertZeduChannel(db *gorm.DB, orgID string, channel external_models.ZeduChannel, ownerID string) error {
@@ -238,7 +245,7 @@ func upsertZeduChannel(db *gorm.DB, orgID string, channel external_models.ZeduCh
 	return mirror.CreateChannel(db)
 }
 
-func syncZeduChannelMembers(deps ZeduLoginDeps, job ZeduSyncJob, channelID string, people map[string]officePerson) error {
+func (m zeduMembers) syncChannel(deps ZeduLoginDeps, job ZeduSyncJob, channelID string) error {
 	members, err := collectZeduPages(func(page int) ([]external_models.ZeduChannelMember, int, error) {
 		resp, err := deps.ExtReq.SendExternalRequest(request.ZeduFetchChanUsers, pageRequest(job.Token, channelID, page))
 		if err != nil {
@@ -253,7 +260,7 @@ func syncZeduChannelMembers(deps ZeduLoginDeps, job ZeduSyncJob, channelID strin
 
 	keep := make([]string, 0, len(members))
 	for _, member := range members {
-		person, ok := people[member.ID]
+		person, ok := m.People[member.ID]
 		if !ok {
 			continue
 		}
@@ -265,8 +272,10 @@ func syncZeduChannelMembers(deps ZeduLoginDeps, job ZeduSyncJob, channelID strin
 		}
 	}
 
-	// Nobody matched means the member sync fell short, not an empty channel.
-	if len(keep) == 0 {
+	// Removing anyone needs a complete member sync: a colleague who could not
+	// be prepared is missing from the list without having left the channel.
+	// Nobody matched also means the member sync fell short.
+	if !m.Complete || len(keep) == 0 {
 		return nil
 	}
 	return deps.Db.Where("channels_id = ? AND user_id NOT IN ?", channelID, keep).Delete(&models.UserChannels{}).Error
