@@ -106,6 +106,25 @@ func SyncZeduOrg(deps ZeduLoginDeps, job ZeduSyncJob) error {
 	return syncZeduChannels(deps, job, members)
 }
 
+// holdsOfficeOwnership reports whether userID owns org in the office, by
+// owner_id or by the Owner role; authorisation trusts either.
+func holdsOfficeOwnership(db *gorm.DB, org models.Organisation, userID string) (bool, error) {
+	if org.OwnerID == userID {
+		return true, nil
+	}
+
+	var ownerRole models.OrgRole
+	ownerRole, err := ownerRole.GetAOrgRoleByName(db, models.OrgRoleNameOwner)
+	if err != nil {
+		return false, err
+	}
+	var count int64
+	err = db.Model(&models.OrgUserManagement{}).
+		Where("organisation_id = ? AND user_id = ? AND role_id = ?", org.ID, userID, ownerRole.ID).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // settleZeduOwnership copies roles and the owner from zedu before a session is
 // issued. A mirror created by a member who is not zedu's owner starts with
 // that member as owner, and authorisation trusts both the Owner role and
