@@ -246,7 +246,15 @@ func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, members zeduMembers) 
 		if person, ok := members.People[channel.OwnerID]; ok {
 			owner = person.ID
 		}
-		if err := upsertZeduChannel(deps.Db, job.OrgID, channel, owner); err != nil {
+		mirror := models.Channels{
+			ID:             channel.ID,
+			Name:           channel.Name,
+			Description:    channel.Description,
+			OrganisationID: job.OrgID,
+			OwnerId:        owner,
+			IsPrivate:      channel.IsPrivate,
+		}
+		if err := upsertZeduChannel(deps.Db, mirror); err != nil {
 			deps.Logger.Error("zedu sync could not mirror a channel", channel.ID, err.Error())
 			complete = false
 			continue
@@ -271,31 +279,24 @@ func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, members zeduMembers) 
 		Update("archived", true).Error
 }
 
-func upsertZeduChannel(db *gorm.DB, orgID string, channel external_models.ZeduChannel, ownerID string) error {
+// upsertZeduChannel creates the office mirror of a zedu channel, or refreshes
+// it; an existing mirror keeps its owner.
+func upsertZeduChannel(db *gorm.DB, mirror models.Channels) error {
 	var existing models.Channels
-	err := db.Where("id = ?", channel.ID).First(&existing).Error
+	err := db.Where("id = ?", mirror.ID).First(&existing).Error
 	if err == nil {
-		if existing.OrganisationID != orgID {
-			return fmt.Errorf("channel %s belongs to another organisation", channel.ID)
+		if existing.OrganisationID != mirror.OrganisationID {
+			return fmt.Errorf("channel %s belongs to another organisation", mirror.ID)
 		}
-		return db.Model(&models.Channels{}).Where("id = ?", channel.ID).Updates(map[string]any{
-			"name":        channel.Name,
-			"description": channel.Description,
-			"is_private":  channel.IsPrivate,
+		return db.Model(&models.Channels{}).Where("id = ?", mirror.ID).Updates(map[string]any{
+			"name":        mirror.Name,
+			"description": mirror.Description,
+			"is_private":  mirror.IsPrivate,
 			"archived":    false,
 		}).Error
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
-	}
-
-	mirror := models.Channels{
-		ID:             channel.ID,
-		Name:           channel.Name,
-		Description:    channel.Description,
-		OrganisationID: orgID,
-		OwnerId:        ownerID,
-		IsPrivate:      channel.IsPrivate,
 	}
 	return mirror.CreateChannel(db)
 }
