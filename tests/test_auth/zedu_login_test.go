@@ -237,3 +237,20 @@ func TestZeduPaginationReadsTotalPages(t *testing.T) {
 		t.Errorf("expected 3 pages, got %d", members.Pagination.TotalPages)
 	}
 }
+
+func TestZeduLoginRefusesDeactivatedAccount(t *testing.T) {
+	r, db, _ := zeduLoginRouter(t)
+	email := strings.ToLower(fmt.Sprintf("zedu-deact-%s@example.com", utility.RandomString(8)))
+	token := zedu_mocks.ValidTokenPrefix + email
+
+	first := postZeduLogin(r, models.ZeduLoginRequestModel{Token: token})
+	tst.AssertStatusCode(t, first.Code, http.StatusOK)
+	authService.WaitForZeduSyncs()
+
+	if err := db.Postgresql.Model(&models.User{}).Where("email = ?", email).Update("deactivated", true).Error; err != nil {
+		t.Fatalf("deactivating the account: %v", err)
+	}
+
+	second := postZeduLogin(r, models.ZeduLoginRequestModel{Token: token})
+	tst.AssertStatusCode(t, second.Code, http.StatusForbidden)
+}
