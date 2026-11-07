@@ -55,6 +55,12 @@ type GoogleRequestModel struct {
 	ApplicationType string `json:"application_type" validate:"omitempty,oneof=desktop"`
 }
 
+// ZeduLoginRequestModel carries the session token of a user already signed in
+// to zedu (the desktop app), exchanged for an office session.
+type ZeduLoginRequestModel struct {
+	Token string `json:"token" validate:"required"`
+}
+
 type VerifyEmailRequestModel struct {
 	Email string `json:"email" validate:"required,email"`
 }
