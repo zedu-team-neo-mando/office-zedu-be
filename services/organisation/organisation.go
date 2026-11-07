@@ -145,7 +145,7 @@ func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId st
 
 	org.OrganisationSlug = slug.Make(req.Name)
 
-	err = CreateOrgUserManagement(db, user.ID, org.ID, req.CreatorRoleName)
+	err = CreateOrgUserManagement(db, OrgMemberSpec{UserID: user.ID, OrgID: org.ID, RoleName: req.CreatorRoleName})
 	if err != nil {
 		return nil, err
 	}
