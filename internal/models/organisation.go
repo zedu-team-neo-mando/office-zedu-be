@@ -70,6 +70,12 @@ type CreateOrgRequestModel struct {
 	// "general" channel.
 	ID                 string `json:"-"`
 	SkipDefaultChannel bool   `json:"-"`
+
+	// Also set only by the zedu sync. A mirror can be created by a member who
+	// is not zedu's owner, so the owner and the creator's role are named up
+	// front instead of defaulting to whoever called.
+	OwnerUserID     string `json:"-"`
+	CreatorRoleName string `json:"-"`
 }
 
 type UpdateOrgRequestModel struct {
