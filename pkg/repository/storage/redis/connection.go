@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 
@@ -53,19 +54,27 @@ func connectToDb(host, port, db string, logger *utility.Logger) *redis.Client {
 
 	addr := fmt.Sprintf("%v:%v", host, port)
 
+	// This client is shared by every caller, so its timeouts decide how long a
+	// caller is held up when Redis is slow or gone. The defaults let a single
+	// command block for tens of seconds; one retry keeps an outage from being
+	// multiplied on someone's critical path.
 	redisClient := redis.NewClient(&redis.Options{
-		Addr:     addr,
-		Password: "",
-		DB:       dbInst,
+		Addr:         addr,
+		Password:     "",
+		DB:           dbInst,
+		DialTimeout:  2 * time.Second,
+		ReadTimeout:  2 * time.Second,
+		WriteTimeout: 2 * time.Second,
+		MaxRetries:   1,
 	})
 
+	// Pinged once: a second ping only repeated the wait on an unreachable server.
 	if err := redisClient.Ping(Ctx).Err(); err != nil {
 		utility.LogAndPrint(logger, fmt.Sprintln(addr))
 		utility.LogAndPrint(logger, fmt.Sprintln("Redis db error: ", err))
+	} else {
+		utility.LogAndPrint(logger, fmt.Sprintln("Redis says: PONG"))
 	}
-
-	pong, _ := redisClient.Ping(Ctx).Result()
-	utility.LogAndPrint(logger, fmt.Sprintln("Redis says: ", pong))
 
 	return redisClient
 }
