@@ -70,7 +70,9 @@ type memberSpec struct {
 func startZeduSync(deps ZeduLoginDeps, job ZeduSyncJob) {
 	claimed, err := ClaimZeduSync(zeduSyncClient(), job.OrgID)
 	if err != nil {
-		// A claim that cannot be read is not a claim that was taken. Skipping
+		// A claim that cannot be read is not a claim that was taken: running
+		// anyway lets two syncs overlap, and the older snapshot that finishes
+		// last can deactivate a colleague the newer one just added. Skipping
 		// only delays the organisation's refresh; the signing-in user's own
 		// account and membership are mirrored by the sign-in itself.
 		deps.Logger.Error("zedu sync skipped: the sync claim failed", job.OrgID, err.Error())
@@ -105,8 +107,8 @@ func zeduSyncClient() *redis.Client {
 
 // claimZeduSync takes the organisation's sync slot for zeduSyncInterval across
 // all instances, and reports whether this caller holds it. A nil client means no
-// Redis, so every login syncs. This is only a rate limit; SyncZeduOrg
-// independently serializes syncs using the database.
+// Redis, so every login syncs. An error fails closed: a sync that cannot prove it
+// is alone must not run the deactivation pass.
 func ClaimZeduSync(client *redis.Client, orgID string) (bool, error) {
 	if client == nil {
 		return true, nil
@@ -118,24 +120,18 @@ func ClaimZeduSync(client *redis.Client, orgID string) (bool, error) {
 }
 
 func SyncZeduOrg(deps ZeduLoginDeps, job ZeduSyncJob) error {
-	// Lock before reading Zedu and keep every write on the same transaction.
-	// Unlike the Redis rate limit, this serializes syncs across instances for
-	// their entire lifetime, even when Redis is absent or its claim expires.
-	return deps.Db.Transaction(func(tx *gorm.DB) error {
-		var org models.Organisation
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("id = ?", job.OrgID).First(&org).Error; err != nil {
-			return err
-		}
-		deps.Db = tx
+	var org models.Organisation
+	org, err := org.GetOrgByID(deps.Db, job.OrgID)
+	if err != nil {
+		return err
+	}
 
-		members, err := syncZeduMembers(deps, job, &org)
-		if err != nil {
-			return err
-		}
+	members, err := syncZeduMembers(deps, job, &org)
+	if err != nil {
+		return err
+	}
 
-		return syncZeduChannels(deps, job, members)
-	})
+	return syncZeduChannels(deps, job, members)
 }
 
 // readZeduMembers reads every page of the organisation's zedu member list. It
@@ -210,8 +206,10 @@ func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisati
 
 // deactivateDeparted deactivates the members this sync no longer sees. It is the
 // one destructive step of a sync, so it only acts when a second read of the
-// member list agrees nobody is missing: a sign-in can mirror a new member
-// while this sync is reading Zedu.
+// member list agrees nobody is missing: two syncs can overlap (the claim is best
+// effort, and a deployment without Redis syncs on every login), and the sync
+// holding the older snapshot may reach this point after a newer one has already
+// added someone.
 func deactivateDeparted(deps ZeduLoginDeps, job ZeduSyncJob, people map[string]officePerson) error {
 	var candidates int64
 	err := deps.Db.Model(&models.OrgUserManagement{}).
