@@ -12,9 +12,19 @@ import (
 // <email>. Anything else is rejected as an expired session.
 const ValidTokenPrefix = "zedu-valid:"
 
+// ColleagueTokenPrefix marks a mock session of the colleague in <email>'s
+// organisation: "zedu-colleague:<email>" signs in as ColleagueEmail(email),
+// a member who is not the owner.
+const ColleagueTokenPrefix = "zedu-colleague:"
+
+// emailFromToken returns the owner email the mock organisation is keyed by.
 func emailFromToken(token string) (string, bool) {
-	email, ok := strings.CutPrefix(token, ValidTokenPrefix)
-	return strings.ToLower(email), ok && email != ""
+	for _, prefix := range []string{ValidTokenPrefix, ColleagueTokenPrefix} {
+		if email, ok := strings.CutPrefix(token, prefix); ok && email != "" {
+			return strings.ToLower(email), true
+		}
+	}
+	return "", false
 }
 
 func stableID(kind, key string) string {
@@ -38,10 +48,15 @@ func FetchMe(data any) (external_models.ZeduUser, error) {
 		return external_models.ZeduUser{}, external_models.ErrZeduTokenInvalid
 	}
 
+	who := email
+	if strings.HasPrefix(token, ColleagueTokenPrefix) {
+		who = ColleagueEmail(email)
+	}
+
 	return external_models.ZeduUser{
-		ID:         UserID(email),
-		Email:      email,
-		Username:   "mock_" + strings.Split(email, "@")[0],
+		ID:         UserID(who),
+		Email:      who,
+		Username:   "mock_" + strings.Split(who, "@")[0],
 		Fullname:   "Mock User",
 		CurrentOrg: OrgID(email),
 		Organisation: external_models.ZeduOrganisation{
