@@ -529,6 +529,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/UnauthorizedErrorSchema"
 
+  /auth/zedu:
+    post:
+      tags:
+        - auth
+      summary: Sign in to the office with an existing zedu session (desktop app)
+      description: >
+        Exchanges a zedu-be session token for an office session. zedu-be confirms
+        the token through GET /users/me; the office then mirrors the user and
+        their current zedu organisation (same IDs) and issues its own token. The
+        organisation's members, roles, channels and channel members are synced
+        from zedu in the background, at most once every five minutes per
+        organisation. Mirrored channels keep their zedu IDs.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token:
+                  type: string
+                  description: The user's zedu-be access token
+              required:
+                - token
+      responses:
+        "200":
+          description: >
+            user sign in successfully. Same body as /auth/login, plus
+            data.zedu_connect_url, zedu-be's Centrifugo websocket (empty
+            until it is configured; the web app then polls instead).
+        "401":
+          description: zedu rejected the session token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnauthorizedErrorSchema"
+        "409":
+          description: the zedu account has no current organisation
+        "422":
+          description: Unprocessed Entity
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnprocessedEntityErrorSchema"
+        "502":
+          description: zedu-be could not be reached or gave an unusable answer
+
   /auth/change-password:
     put:
       tags:
