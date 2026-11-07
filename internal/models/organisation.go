@@ -74,6 +74,8 @@ type CreateOrgRequestModel struct {
 	// Also set only by the zedu sync. A mirror can be created by a member who
 	// is not zedu's owner, so the owner and the creator's role are named up
 	// front instead of defaulting to whoever called.
+	// An empty CreatorRoleName means the creator owns the organisation, as an
+	// ordinary one does.
 	OwnerUserID     string `json:"-"`
 	CreatorRoleName string `json:"-"`
 }

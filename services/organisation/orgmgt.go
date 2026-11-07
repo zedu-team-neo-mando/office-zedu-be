@@ -17,7 +17,7 @@ import (
 )
 
 // OrgMemberSpec names a membership to create: who joins which organisation,
-// and with which role. An empty RoleName means Owner.
+// and with which role. RoleName is required.
 type OrgMemberSpec struct {
 	UserID   string
 	OrgID    string
@@ -25,17 +25,15 @@ type OrgMemberSpec struct {
 }
 
 // CreateOrgUserManagement adds a member to an organisation with the given role.
-// Callers that create an ordinary organisation leave the role empty: its
-// creator owns it. The zedu sync creates a mirror on behalf of someone else, so
-// it passes a plain member role and names the real owner on the request.
+// There is no default: a missing role is refused rather than read as Owner, so
+// no caller can grant ownership by leaving it out.
 func CreateOrgUserManagement(db *gorm.DB, spec OrgMemberSpec) error {
 	var orgRole models.OrgRole
 
-	roleName := spec.RoleName
-	if roleName == "" {
-		roleName = models.OrgRoleNameOwner
+	if spec.RoleName == "" {
+		return errors.New("a membership needs a role")
 	}
-	orgRole, err := orgRole.GetAOrgRoleByName(db, roleName)
+	orgRole, err := orgRole.GetAOrgRoleByName(db, spec.RoleName)
 	if err != nil {
 		return err
 	}
