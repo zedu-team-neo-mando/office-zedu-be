@@ -84,7 +84,7 @@ func FetchOrgMembers(data any) (external_models.ZeduOrgMembersPage, error) {
 			{ID: UserID(colleague), Email: colleague, UserName: "mock_colleague", Name: "Mock Colleague", Role: "User", EntityType: "user"},
 			{ID: stableID("bot", email), Email: "bot." + email, Name: "Mock Bot", Role: "Bot", EntityType: "bot"},
 		},
-		Pagination: external_models.ZeduPagination{CurrentPage: 1, TotalPagesCount: 1},
+		Pagination: external_models.ZeduPagination{CurrentPage: 1, TotalPages: 1},
 	}, nil
 }
 
@@ -100,7 +100,7 @@ func FetchOrgChannels(data any) (external_models.ZeduChannelsPage, error) {
 			{ID: GeneralChannelID(email), Name: "general", Description: "everyone", OwnerID: UserID(email)},
 			{ID: PrivateChannelID(email), Name: "leads", Description: "private", OwnerID: UserID(email), IsPrivate: true},
 		},
-		Pagination: external_models.ZeduPagination{CurrentPage: 1, TotalPagesCount: 1},
+		Pagination: external_models.ZeduPagination{CurrentPage: 1, TotalPages: 1},
 	}, nil
 }
 
@@ -119,6 +119,6 @@ func FetchChannelMembers(data any) (external_models.ZeduChannelMembersPage, erro
 
 	return external_models.ZeduChannelMembersPage{
 		Data:       members,
-		Pagination: external_models.ZeduPagination{CurrentPage: 1, TotalPagesCount: 1},
+		Pagination: external_models.ZeduPagination{CurrentPage: 1, TotalPages: 1},
 	}, nil
 }

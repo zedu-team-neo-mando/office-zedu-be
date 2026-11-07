@@ -140,7 +140,7 @@ func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisati
 			return nil, 0, err
 		}
 		result, _ := resp.(external_models.ZeduOrgMembersPage)
-		return result.Data, result.Pagination.TotalPagesCount, nil
+		return result.Data, result.Pagination.TotalPages, nil
 	})
 	if err != nil {
 		return zeduMembers{}, fmt.Errorf("reading zedu members: %w", err)
@@ -210,7 +210,7 @@ func syncZeduChannels(deps ZeduLoginDeps, job ZeduSyncJob, members zeduMembers) 
 			return nil, 0, err
 		}
 		result, _ := resp.(external_models.ZeduChannelsPage)
-		return result.Data, result.Pagination.TotalPagesCount, nil
+		return result.Data, result.Pagination.TotalPages, nil
 	})
 	if err != nil {
 		return fmt.Errorf("reading zedu channels: %w", err)
@@ -288,7 +288,7 @@ func (m zeduMembers) syncChannel(deps ZeduLoginDeps, job ZeduSyncJob, channelID 
 			return nil, 0, err
 		}
 		result, _ := resp.(external_models.ZeduChannelMembersPage)
-		return result.Data, result.Pagination.TotalPagesCount, nil
+		return result.Data, result.Pagination.TotalPages, nil
 	})
 	if err != nil {
 		return err
@@ -379,7 +379,10 @@ func collectZeduPages[T any](fetch func(page int) ([]T, int, error)) ([]T, error
 			return nil, err
 		}
 		all = append(all, items...)
-		if page >= totalPages || len(items) == 0 {
+		// Without a page count, reading goes on until a page comes back short:
+		// stopping after page one would make a partial list look complete.
+		known := totalPages > 0
+		if len(items) == 0 || (known && page >= totalPages) || (!known && len(items) < zeduPageLimit) {
 			return all, nil
 		}
 	}

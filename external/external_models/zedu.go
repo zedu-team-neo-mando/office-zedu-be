@@ -58,9 +58,11 @@ type ZeduChannelMember struct {
 	Email string `json:"email"`
 }
 
+// ZeduPagination is the pagination zedu-be's member and channel lists return;
+// their controllers name the page count total_pages.
 type ZeduPagination struct {
-	CurrentPage     int `json:"current_page"`
-	TotalPagesCount int `json:"total_pages_count"`
+	CurrentPage int `json:"current_page"`
+	TotalPages  int `json:"total_pages"`
 }
 
 type ZeduOrgMembersPage struct {
