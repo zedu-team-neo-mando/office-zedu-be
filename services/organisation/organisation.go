@@ -145,7 +145,13 @@ func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId st
 
 	org.OrganisationSlug = slug.Make(req.Name)
 
-	err = CreateOrgUserManagement(db, OrgMemberSpec{UserID: user.ID, OrgID: org.ID, RoleName: req.CreatorRoleName})
+	// Whoever creates an ordinary organisation owns it. The zedu sync names a
+	// plain role instead when it creates a mirror on someone else's behalf.
+	creatorRole := req.CreatorRoleName
+	if creatorRole == "" {
+		creatorRole = models.OrgRoleNameOwner
+	}
+	err = CreateOrgUserManagement(db, OrgMemberSpec{UserID: user.ID, OrgID: org.ID, RoleName: creatorRole})
 	if err != nil {
 		return nil, err
 	}
