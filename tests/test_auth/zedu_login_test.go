@@ -117,6 +117,8 @@ func TestSyncZeduOrgMirrorsMembersAndChannels(t *testing.T) {
 
 	login := postZeduLogin(r, models.ZeduLoginRequestModel{Token: token})
 	tst.AssertStatusCode(t, login.Code, http.StatusOK)
+	// The login starts its own sync; let it finish so this one does not race it.
+	authService.WaitForZeduSyncs()
 
 	orgID := zedu_mocks.OrgID(email)
 	err := authService.SyncZeduOrg(deps, authService.ZeduSyncJob{
@@ -173,5 +175,43 @@ func TestSyncZeduOrgMirrorsMembersAndChannels(t *testing.T) {
 	}
 	if privateMembers != 1 {
 		t.Errorf("expected only the caller in the private channel, got %d", privateMembers)
+	}
+}
+
+func TestZeduLoginByAMemberDoesNotMakeThemOwner(t *testing.T) {
+	r, db, _ := zeduLoginRouter(t)
+	owner := strings.ToLower(fmt.Sprintf("zedu-owner-%s@example.com", utility.RandomString(8)))
+
+	login := postZeduLogin(r, models.ZeduLoginRequestModel{Token: zedu_mocks.ColleagueTokenPrefix + owner})
+	tst.AssertStatusCode(t, login.Code, http.StatusOK)
+	authService.WaitForZeduSyncs()
+
+	var ownerUser, member models.User
+	if err := db.Postgresql.Where("email = ?", owner).First(&ownerUser).Error; err != nil {
+		t.Fatalf("expected the zedu owner to be mirrored before the member's session: %v", err)
+	}
+	if err := db.Postgresql.Where("email = ?", zedu_mocks.ColleagueEmail(owner)).First(&member).Error; err != nil {
+		t.Fatalf("expected the member's office account: %v", err)
+	}
+
+	var org models.Organisation
+	if err := db.Postgresql.Where("id = ?", zedu_mocks.OrgID(owner)).First(&org).Error; err != nil {
+		t.Fatalf("expected the organisation mirror: %v", err)
+	}
+	if org.OwnerID != ownerUser.ID {
+		t.Errorf("owner_id should be the zedu owner %s, got %s", ownerUser.ID, org.OwnerID)
+	}
+
+	var ownerRole models.OrgRole
+	ownerRole, err := ownerRole.GetAOrgRoleByName(db.Postgresql, models.OrgRoleNameOwner)
+	if err != nil {
+		t.Fatalf("owner role: %v", err)
+	}
+	var membership models.OrgUserManagement
+	if err := db.Postgresql.Where("organisation_id = ? AND user_id = ?", org.ID, member.ID).First(&membership).Error; err != nil {
+		t.Fatalf("expected the member's membership: %v", err)
+	}
+	if membership.RoleID == ownerRole.ID {
+		t.Errorf("the first member to sign in must not keep the Owner role")
 	}
 }

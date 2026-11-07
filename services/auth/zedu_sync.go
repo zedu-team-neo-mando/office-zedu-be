@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofrs/uuid"
@@ -40,6 +41,15 @@ type zeduMembers struct {
 	Complete bool
 }
 
+// pendingZeduSyncs counts the background syncs still running.
+var pendingZeduSyncs sync.WaitGroup
+
+// WaitForZeduSyncs blocks until every background sync started so far has
+// finished, so a test's own reads do not race the sync a login started.
+func WaitForZeduSyncs() {
+	pendingZeduSyncs.Wait()
+}
+
 type officePerson struct {
 	ID       string
 	Username string
@@ -57,7 +67,9 @@ func startZeduSync(deps ZeduLoginDeps, job ZeduSyncJob) {
 		return
 	}
 
+	pendingZeduSyncs.Add(1)
 	go func() {
+		defer pendingZeduSyncs.Done()
 		defer func() {
 			if r := recover(); r != nil {
 				deps.Logger.Error("zedu sync panicked", job.OrgID, r)
