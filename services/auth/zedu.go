@@ -76,7 +76,7 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 		return nil, http.StatusForbidden, errors.New("this office account has been deactivated")
 	}
 
-	org, err := ensureZeduOrg(deps, zeduUser, req.Token, user)
+	org, err := ensureZeduOrg(deps, zeduSignIn{User: zeduUser, Token: req.Token, Caller: user})
 	if err != nil {
 		if errors.Is(err, errZeduOwnerUnconfirmed) {
 			deps.Logger.Error("zedu organisation owner could not be resolved", zeduUser.Organisation.ID, err.Error())
@@ -184,6 +184,14 @@ func uniqueProfileUsername(db *gorm.DB, base string) string {
 	return username
 }
 
+// zeduSignIn is one desktop sign-in: the zedu user and the session token zedu
+// confirmed, and the office account they are signing in as.
+type zeduSignIn struct {
+	User   external_models.ZeduUser
+	Token  string
+	Caller models.User
+}
+
 // ensureZeduOrg returns the office mirror of a zedu organisation, creating it
 // under the zedu org's own ID. Its channels come from the zedu sync, so no
 // default "general" channel is made.
@@ -194,8 +202,9 @@ func uniqueProfileUsername(db *gorm.DB, base string) string {
 // privileges they do not have in zedu. Refusing the sign-in leaves nothing
 // behind; creating the mirror and correcting it afterwards leaves a window in
 // which the wrong owner can switch into it.
-func ensureZeduOrg(deps ZeduLoginDeps, zeduUser external_models.ZeduUser, token string, caller models.User) (models.Organisation, error) {
+func ensureZeduOrg(deps ZeduLoginDeps, signIn zeduSignIn) (models.Organisation, error) {
 	var org models.Organisation
+	zeduUser, caller := signIn.User, signIn.Caller
 	zorg := zeduUser.Organisation
 
 	if postgresql.CheckExists(deps.Db, &models.Organisation{}, "id = ?", zorg.ID) {
@@ -208,7 +217,7 @@ func ensureZeduOrg(deps ZeduLoginDeps, zeduUser external_models.ZeduUser, token 
 	ownerID := caller.ID
 	creatorRole := models.OrgRoleNameOwner
 	if zorg.OwnerID != "" && zorg.OwnerID != zeduUser.ID {
-		owner, err := zeduOwnerAccount(deps, zorg, token)
+		owner, err := zeduOwnerAccount(deps, zorg, signIn.Token)
 		if err != nil {
 			return org, err
 		}
