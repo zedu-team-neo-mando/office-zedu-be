@@ -73,6 +73,13 @@ func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId st
 		picUrl = req.LogoURL
 	}
 
+	// A mirror organisation is created by whoever signed in first, which is
+	// not necessarily its owner, so the owner can be named explicitly.
+	ownerID := req.OwnerUserID
+	if ownerID == "" {
+		ownerID = userId
+	}
+
 	org := models.Organisation{
 		ID:            orgId,
 		Name:          req.Name,
@@ -80,7 +87,7 @@ func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId st
 		Location:      strings.ToLower(req.Location),
 		Email:         strings.ToLower(req.Email),
 		Type:          strings.ToLower(req.Type),
-		OwnerID:       userId,
+		OwnerID:       ownerID,
 		CreditBalance: float64(credits),
 		Country:       strings.ToLower(req.Country),
 		LogoURL:       picUrl,
@@ -138,7 +145,7 @@ func CreateOrganisation(req models.CreateOrgRequestModel, db *gorm.DB, userId st
 
 	org.OrganisationSlug = slug.Make(req.Name)
 
-	err = CreateOrgUserManagement(db, user.ID, org.ID)
+	err = CreateOrgUserManagement(db, user.ID, org.ID, req.CreatorRoleName)
 	if err != nil {
 		return nil, err
 	}

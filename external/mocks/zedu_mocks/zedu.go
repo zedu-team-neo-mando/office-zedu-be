@@ -1,6 +1,7 @@
 package zedu_mocks
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/gofrs/uuid"
@@ -17,9 +18,13 @@ const ValidTokenPrefix = "zedu-valid:"
 // a member who is not the owner.
 const ColleagueTokenPrefix = "zedu-colleague:"
 
+// UnreadableMembersTokenPrefix signs in as the same colleague as
+// ColleagueTokenPrefix, but the organisation's member list cannot be read.
+const UnreadableMembersTokenPrefix = "zedu-unreadable-members:"
+
 // emailFromToken returns the owner email the mock organisation is keyed by.
 func emailFromToken(token string) (string, bool) {
-	for _, prefix := range []string{ValidTokenPrefix, ColleagueTokenPrefix} {
+	for _, prefix := range []string{ValidTokenPrefix, ColleagueTokenPrefix, UnreadableMembersTokenPrefix} {
 		if email, ok := strings.CutPrefix(token, prefix); ok && email != "" {
 			return strings.ToLower(email), true
 		}
@@ -49,7 +54,7 @@ func FetchMe(data any) (external_models.ZeduUser, error) {
 	}
 
 	who := email
-	if strings.HasPrefix(token, ColleagueTokenPrefix) {
+	if strings.HasPrefix(token, ColleagueTokenPrefix) || strings.HasPrefix(token, UnreadableMembersTokenPrefix) {
 		who = ColleagueEmail(email)
 	}
 
@@ -75,6 +80,9 @@ func FetchOrgMembers(data any) (external_models.ZeduOrgMembersPage, error) {
 	email, ok := emailFromToken(req.Token)
 	if !ok {
 		return external_models.ZeduOrgMembersPage{}, external_models.ErrZeduTokenInvalid
+	}
+	if strings.HasPrefix(req.Token, UnreadableMembersTokenPrefix) {
+		return external_models.ZeduOrgMembersPage{}, errors.New("zedu member list is unavailable")
 	}
 
 	colleague := ColleagueEmail(email)

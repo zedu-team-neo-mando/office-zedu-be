@@ -19,6 +19,7 @@ import (
 	"github.com/hngprojects/telex_be/pkg/controller/auth"
 	"github.com/hngprojects/telex_be/pkg/repository/storage"
 	authService "github.com/hngprojects/telex_be/services/auth"
+	userService "github.com/hngprojects/telex_be/services/user"
 	tst "github.com/hngprojects/telex_be/tests"
 	"github.com/hngprojects/telex_be/utility"
 )
@@ -214,6 +215,45 @@ func TestZeduLoginByAMemberDoesNotMakeThemOwner(t *testing.T) {
 	}
 	if membership.RoleID == ownerRole.ID {
 		t.Errorf("the first member to sign in must not keep the Owner role")
+	}
+}
+
+// A member signing in to an organisation the office has never mirrored must not
+// leave a half-built mirror behind. The owner is resolved before anything is
+// written, so a member list that cannot be read refuses the sign-in instead of
+// committing an organisation the member would own.
+func TestZeduLoginCommitsNothingWhenTheMemberReadFails(t *testing.T) {
+	r, db, _ := zeduLoginRouter(t)
+	owner := strings.ToLower(fmt.Sprintf("zedu-owner-%s@example.com", utility.RandomString(8)))
+	memberEmail := zedu_mocks.ColleagueEmail(owner)
+
+	// The member already has an office session from signing in as themselves.
+	first := postZeduLogin(r, models.ZeduLoginRequestModel{Token: zedu_mocks.ValidTokenPrefix + memberEmail})
+	tst.AssertStatusCode(t, first.Code, http.StatusOK)
+	authService.WaitForZeduSyncs()
+
+	// Their next sign-in is to the owner's zedu organisation, whose member list
+	// zedu will not return.
+	second := postZeduLogin(r, models.ZeduLoginRequestModel{Token: zedu_mocks.UnreadableMembersTokenPrefix + owner})
+	tst.AssertStatusCode(t, second.Code, http.StatusServiceUnavailable)
+
+	var orgs, memberships int64
+	db.Postgresql.Model(&models.Organisation{}).Where("id = ?", zedu_mocks.OrgID(owner)).Count(&orgs)
+	db.Postgresql.Model(&models.OrgUserManagement{}).Where("organisation_id = ?", zedu_mocks.OrgID(owner)).Count(&memberships)
+	if orgs != 0 || memberships != 0 {
+		t.Fatalf("a refused sign-in must not mirror the organisation: %d organisations, %d memberships", orgs, memberships)
+	}
+
+	var member models.User
+	if err := db.Postgresql.Where("email = ?", memberEmail).First(&member).Error; err != nil {
+		t.Fatalf("expected the member's office account: %v", err)
+	}
+
+	// The existing session has nothing to switch into, so it cannot pick up the
+	// organisation's owner privileges that way.
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	if _, status, err := userService.SwitchUserOrg(db.Postgresql, ctx, models.SwitchUserOrgReqeust{CurrentOrg: zedu_mocks.OrgID(owner)}, member.ID, ""); status != http.StatusNotFound || err == nil {
+		t.Errorf("switching into an organisation that was never mirrored must be refused, got %d %v", status, err)
 	}
 }
 

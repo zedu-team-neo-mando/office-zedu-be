@@ -106,61 +106,25 @@ func SyncZeduOrg(deps ZeduLoginDeps, job ZeduSyncJob) error {
 	return syncZeduChannels(deps, job, members)
 }
 
-// holdsOfficeOwnership reports whether userID owns org in the office, by
-// owner_id or by the Owner role; authorisation trusts either.
-func holdsOfficeOwnership(db *gorm.DB, org models.Organisation, userID string) (bool, error) {
-	if org.OwnerID == userID {
-		return true, nil
-	}
-
-	var ownerRole models.OrgRole
-	ownerRole, err := ownerRole.GetAOrgRoleByName(db, models.OrgRoleNameOwner)
-	if err != nil {
-		return false, err
-	}
-	var count int64
-	err = db.Model(&models.OrgUserManagement{}).
-		Where("organisation_id = ? AND user_id = ? AND role_id = ?", org.ID, userID, ownerRole.ID).
-		Count(&count).Error
-	return count > 0, err
-}
-
-// settleZeduOwnership copies roles and the owner from zedu before a session is
-// issued. A mirror created by a member who is not zedu's owner starts with
-// that member as owner, and authorisation trusts both the Owner role and
-// owner_id, so neither may outlive the sign-in.
-func settleZeduOwnership(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation) error {
-	members, err := syncZeduMembers(deps, job, org)
-	if err != nil {
-		return fmt.Errorf("could not confirm the organisation's roles with zedu: %w", err)
-	}
-	if !members.Complete {
-		return errors.New("could not confirm every member's role with zedu")
-	}
-
-	settled, err := org.GetOrgByID(deps.Db, org.ID)
-	if err != nil {
-		return err
-	}
-	if settled.OwnerID == job.CallerID {
-		return errors.New("the organisation's owner could not be set up in the office")
-	}
-	*org = settled
-	return nil
-}
-
-// syncZeduMembers mirrors the organisation's zedu members into the office.
-// Members who are gone from zedu are deactivated, but only after a complete
-// read, so a failed page never locks people out.
-func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation) (zeduMembers, error) {
-	members, err := collectZeduPages(func(page int) ([]external_models.ZeduOrgMember, int, error) {
-		resp, err := deps.ExtReq.SendExternalRequest(request.ZeduFetchOrgMembers, pageRequest(job.Token, job.OrgID, page))
+// readZeduMembers reads every page of the organisation's zedu member list. It
+// only returns when the whole list was read, so callers can treat the result as
+// evidence of who the members are.
+func readZeduMembers(deps ZeduLoginDeps, token, orgID string) ([]external_models.ZeduOrgMember, error) {
+	return collectZeduPages(func(page int) ([]external_models.ZeduOrgMember, int, error) {
+		resp, err := deps.ExtReq.SendExternalRequest(request.ZeduFetchOrgMembers, pageRequest(token, orgID, page))
 		if err != nil {
 			return nil, 0, err
 		}
 		result, _ := resp.(external_models.ZeduOrgMembersPage)
 		return result.Data, result.Pagination.TotalPages, nil
 	})
+}
+
+// syncZeduMembers mirrors the organisation's zedu members into the office.
+// Members who are gone from zedu are deactivated, but only after a complete
+// read, so a failed page never locks people out.
+func syncZeduMembers(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation) (zeduMembers, error) {
+	members, err := readZeduMembers(deps, job.Token, job.OrgID)
 	if err != nil {
 		return zeduMembers{}, fmt.Errorf("reading zedu members: %w", err)
 	}

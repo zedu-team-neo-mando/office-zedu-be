@@ -76,8 +76,12 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 		return nil, http.StatusForbidden, errors.New("this office account has been deactivated")
 	}
 
-	org, err := ensureZeduOrg(deps, zeduUser.Organisation, user.ID)
+	org, err := ensureZeduOrg(deps, zeduUser, req.Token, user)
 	if err != nil {
+		if errors.Is(err, errZeduOwnerUnconfirmed) {
+			deps.Logger.Error("zedu organisation owner could not be resolved", zeduUser.Organisation.ID, err.Error())
+			return nil, http.StatusServiceUnavailable, errZeduOwnerUnconfirmed
+		}
 		return nil, http.StatusInternalServerError, fmt.Errorf("could not prepare the office organisation: %w", err)
 	}
 
@@ -93,25 +97,13 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 		return nil, http.StatusInternalServerError, fmt.Errorf("could not add you to the office organisation: %w", err)
 	}
 
+	// The mirror already has zedu's owner on it, so the session is issued without
+	// copying roles first; the background sync keeps members and channels current.
 	job := ZeduSyncJob{
 		Token:       req.Token,
 		OrgID:       org.ID,
 		OwnerZeduID: zeduUser.Organisation.OwnerID,
 		CallerID:    user.ID,
-	}
-	// Ownership is checked by owner_id and by role: an earlier sign-in can have
-	// corrected one and not the other. A zedu co-owner holds the Owner role
-	// legitimately and is simply re-confirmed.
-	if zeduUser.ID != zeduUser.Organisation.OwnerID {
-		owns, err := holdsOfficeOwnership(deps.Db, org, user.ID)
-		if err != nil {
-			return nil, http.StatusInternalServerError, err
-		}
-		if owns {
-			if err := settleZeduOwnership(deps, job, &org); err != nil {
-				return nil, http.StatusServiceUnavailable, err
-			}
-		}
 	}
 
 	if err := deps.Db.Model(&models.User{}).Where("id = ?", user.ID).Update("current_org", org.ID).Error; err != nil {
@@ -195,8 +187,16 @@ func uniqueProfileUsername(db *gorm.DB, base string) string {
 // ensureZeduOrg returns the office mirror of a zedu organisation, creating it
 // under the zedu org's own ID. Its channels come from the zedu sync, so no
 // default "general" channel is made.
-func ensureZeduOrg(deps ZeduLoginDeps, zorg external_models.ZeduOrganisation, creatorID string) (models.Organisation, error) {
+//
+// The owner is resolved before anything is written. The colleague who signs in
+// first is often not zedu's owner, and authorisation trusts owner_id as much as
+// the Owner role, so a mirror that starts with the wrong owner hands that member
+// privileges they do not have in zedu. Refusing the sign-in leaves nothing
+// behind; creating the mirror and correcting it afterwards leaves a window in
+// which the wrong owner can switch into it.
+func ensureZeduOrg(deps ZeduLoginDeps, zeduUser external_models.ZeduUser, token string, caller models.User) (models.Organisation, error) {
 	var org models.Organisation
+	zorg := zeduUser.Organisation
 
 	if postgresql.CheckExists(deps.Db, &models.Organisation{}, "id = ?", zorg.ID) {
 		return org.GetOrgByID(deps.Db, zorg.ID)
@@ -205,9 +205,22 @@ func ensureZeduOrg(deps ZeduLoginDeps, zorg external_models.ZeduOrganisation, cr
 		return org, fmt.Errorf("zedu organisation id %q is not a uuid", zorg.ID)
 	}
 
+	ownerID := caller.ID
+	creatorRole := models.OrgRoleNameOwner
+	if zorg.OwnerID != "" && zorg.OwnerID != zeduUser.ID {
+		owner, err := zeduOwnerAccount(deps, zorg, token)
+		if err != nil {
+			return org, err
+		}
+		ownerID = owner.ID
+		creatorRole = models.OrgRoleNameUser
+	}
+
 	createReq := models.CreateOrgRequestModel{
 		ID:                 zorg.ID,
 		SkipDefaultChannel: true,
+		OwnerUserID:        ownerID,
+		CreatorRoleName:    creatorRole,
 		Name:               firstNonEmpty(zorg.Name, "Zedu organisation"),
 		Description:        zorg.Description,
 		Email:              zorg.Email,
@@ -217,7 +230,7 @@ func ensureZeduOrg(deps ZeduLoginDeps, zorg external_models.ZeduOrganisation, cr
 	}
 
 	err := deps.Db.Transaction(func(tx *gorm.DB) error {
-		if _, err := organisation.CreateOrganisation(createReq, tx, creatorID, deps.Logger); err != nil {
+		if _, err := organisation.CreateOrganisation(createReq, tx, caller.ID, deps.Logger); err != nil {
 			return err
 		}
 		// The logo is a zedu-hosted URL; store it as is rather than re-upload it.
@@ -236,6 +249,44 @@ func ensureZeduOrg(deps ZeduLoginDeps, zorg external_models.ZeduOrganisation, cr
 	}
 
 	return org.GetOrgByID(deps.Db, zorg.ID)
+}
+
+// errZeduOwnerUnconfirmed reports that zedu's owner could not be resolved, so
+// the mirror must not be created at all.
+var errZeduOwnerUnconfirmed = errors.New("could not confirm the organisation's owner with zedu")
+
+// zeduOwnerAccount resolves zedu's owner to their office account, creating it
+// when they have never signed in. The member list is read in full first: a
+// failed or empty read is not evidence of who owns the organisation, so the
+// caller is refused rather than made the owner by default.
+func zeduOwnerAccount(deps ZeduLoginDeps, zorg external_models.ZeduOrganisation, token string) (models.User, error) {
+	members, err := readZeduMembers(deps, token, zorg.ID)
+	if err != nil {
+		return models.User{}, fmt.Errorf("%w: %v", errZeduOwnerUnconfirmed, err)
+	}
+
+	for _, member := range members {
+		if member.ID != zorg.OwnerID {
+			continue
+		}
+		if member.EntityType == "bot" || member.IsDeactivated || strings.TrimSpace(member.Email) == "" {
+			break
+		}
+
+		owner, err := ensureZeduUser(deps.Db, zeduIdentity{
+			ID:        member.ID,
+			Email:     member.Email,
+			Name:      member.Name,
+			Username:  member.UserName,
+			AvatarURL: member.AvatarURL,
+		})
+		if err != nil {
+			return models.User{}, fmt.Errorf("%w: %v", errZeduOwnerUnconfirmed, err)
+		}
+		return owner, nil
+	}
+
+	return models.User{}, fmt.Errorf("%w: the member list does not include the owner", errZeduOwnerUnconfirmed)
 }
 
 func issueOfficeSession(c *gin.Context, deps ZeduLoginDeps, user models.User) (gin.H, error) {

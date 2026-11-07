@@ -16,10 +16,17 @@ import (
 	"github.com/hngprojects/telex_be/utility"
 )
 
-func CreateOrgUserManagement(db *gorm.DB, userID, orgID string) error {
+// CreateOrgUserManagement adds userID to orgID with the given role. Callers
+// that create an ordinary organisation pass the Owner role: its creator owns
+// it. The zedu sync creates a mirror on behalf of someone else, so it passes a
+// plain member role and names the real owner on the request.
+func CreateOrgUserManagement(db *gorm.DB, userID, orgID, roleName string) error {
 	var orgRole models.OrgRole
 
-	orgRole, err := orgRole.GetAOrgRoleByName(db, models.OrgRoleNameOwner)
+	if roleName == "" {
+		roleName = models.OrgRoleNameOwner
+	}
+	orgRole, err := orgRole.GetAOrgRoleByName(db, roleName)
 	if err != nil {
 		return err
 	}
