@@ -90,6 +90,18 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 		return nil, http.StatusInternalServerError, fmt.Errorf("could not add you to the office organisation: %w", err)
 	}
 
+	job := ZeduSyncJob{
+		Token:       req.Token,
+		OrgID:       org.ID,
+		OwnerZeduID: zeduUser.Organisation.OwnerID,
+		CallerID:    user.ID,
+	}
+	if org.OwnerID == user.ID && zeduUser.ID != zeduUser.Organisation.OwnerID {
+		if err := settleZeduOwnership(deps, job, &org); err != nil {
+			return nil, http.StatusServiceUnavailable, err
+		}
+	}
+
 	if err := deps.Db.Model(&models.User{}).Where("id = ?", user.ID).Update("current_org", org.ID).Error; err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
@@ -107,12 +119,7 @@ func ZeduLogin(c *gin.Context, req models.ZeduLoginRequestModel, deps ZeduLoginD
 	// zedu's realtime server; empty means it falls back to polling.
 	responseData["zedu_connect_url"] = zedu.ConnectUrl
 
-	startZeduSync(deps, ZeduSyncJob{
-		Token:       req.Token,
-		OrgID:       org.ID,
-		OwnerZeduID: zeduUser.Organisation.OwnerID,
-		CallerID:    user.ID,
-	})
+	startZeduSync(deps, job)
 
 	return responseData, http.StatusOK, nil
 }

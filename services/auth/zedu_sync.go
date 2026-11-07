@@ -94,6 +94,30 @@ func SyncZeduOrg(deps ZeduLoginDeps, job ZeduSyncJob) error {
 	return syncZeduChannels(deps, job, members)
 }
 
+// settleZeduOwnership copies roles and the owner from zedu before a session is
+// issued. A mirror created by a member who is not zedu's owner starts with
+// that member as owner, and authorisation trusts both the Owner role and
+// owner_id, so neither may outlive the sign-in.
+func settleZeduOwnership(deps ZeduLoginDeps, job ZeduSyncJob, org *models.Organisation) error {
+	members, err := syncZeduMembers(deps, job, org)
+	if err != nil {
+		return fmt.Errorf("could not confirm the organisation's roles with zedu: %w", err)
+	}
+	if !members.Complete {
+		return errors.New("could not confirm every member's role with zedu")
+	}
+
+	settled, err := org.GetOrgByID(deps.Db, org.ID)
+	if err != nil {
+		return err
+	}
+	if settled.OwnerID == job.CallerID {
+		return errors.New("the organisation's owner could not be set up in the office")
+	}
+	*org = settled
+	return nil
+}
+
 // syncZeduMembers mirrors the organisation's zedu members into the office.
 // Members who are gone from zedu are deactivated, but only after a complete
 // read, so a failed page never locks people out.
