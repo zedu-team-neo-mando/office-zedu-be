@@ -1,6 +1,9 @@
 package external_models
 
-import "errors"
+import (
+	"encoding/json"
+	"errors"
+)
 
 // ErrZeduTokenInvalid is returned when zedu-be rejects the session token.
 var ErrZeduTokenInvalid = errors.New("zedu session is invalid or expired")
@@ -31,6 +34,35 @@ type ZeduMeResponse struct {
 	Data struct {
 		User ZeduUser `json:"user"`
 	} `json:"data"`
+}
+
+// UnmarshalJSON accepts both response contracts used by deployed zedu-be
+// versions: {"data":{"user":{...}}} and {"data":{...}}.
+func (r *ZeduMeResponse) UnmarshalJSON(payload []byte) error {
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return err
+	}
+
+	var nested struct {
+		User *ZeduUser `json:"user"`
+	}
+	if err := json.Unmarshal(envelope.Data, &nested); err != nil {
+		return err
+	}
+	if nested.User != nil {
+		r.Data.User = *nested.User
+		return nil
+	}
+
+	var flat ZeduUser
+	if err := json.Unmarshal(envelope.Data, &flat); err != nil {
+		return err
+	}
+	r.Data.User = flat
+	return nil
 }
 
 type ZeduOrgMember struct {
