@@ -45,6 +45,9 @@ func (r *ZeduMeResponse) UnmarshalJSON(payload []byte) error {
 	if err := json.Unmarshal(payload, &envelope); err != nil {
 		return err
 	}
+	if len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return errors.New("zedu response is missing data")
+	}
 
 	var nested struct {
 		User *ZeduUser `json:"user"`
