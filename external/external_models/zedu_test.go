@@ -26,3 +26,12 @@ func TestZeduMeResponseAcceptsFlatUser(t *testing.T) {
 		t.Fatalf("expected flat email, got %q", got)
 	}
 }
+
+func TestZeduMeResponseRejectsMissingData(t *testing.T) {
+	for _, payload := range []string{`{}`, `{"data":null}`} {
+		var response ZeduMeResponse
+		if err := json.Unmarshal([]byte(payload), &response); err == nil {
+			t.Fatalf("expected missing data to be rejected for %s", payload)
+		}
+	}
+}
