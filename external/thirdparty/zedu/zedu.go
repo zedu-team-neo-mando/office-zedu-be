@@ -40,12 +40,35 @@ type Client struct {
 	BaseUrl string
 }
 
+// FetchMe returns the user a zedu session belongs to, with their current
+// organisation. zedu-be has no GET /users/me of its own: that path is answered
+// by GET /users/:user_id with "me" as the ID, which returns the user with an
+// empty email and ID. The user is read from GET /profile instead, as Zedu
+// Desktop does, and the organisation from GET /organisations/:id.
 func (c Client) FetchMe(token string) (external_models.ZeduUser, error) {
-	var resp external_models.ZeduMeResponse
-	if err := c.get("/users/me", token, &resp); err != nil {
+	var profile external_models.ZeduProfileResponse
+	if err := c.get("/profile", token, &profile); err != nil {
 		return external_models.ZeduUser{}, err
 	}
-	return resp.Data.User, nil
+
+	user := external_models.ZeduUser{
+		ID:         profile.Data.UserID,
+		Email:      profile.Data.Email,
+		Username:   profile.Data.Username,
+		Fullname:   profile.Data.FullName,
+		AvatarURL:  profile.Data.AvatarURL,
+		CurrentOrg: profile.Data.OrganisationID,
+	}
+	if user.CurrentOrg == "" {
+		return user, nil
+	}
+
+	var org external_models.ZeduOrganisationResponse
+	if err := c.get("/organisations/"+url.PathEscape(user.CurrentOrg), token, &org); err != nil {
+		return external_models.ZeduUser{}, err
+	}
+	user.Organisation = org.Data
+	return user, nil
 }
 
 func (c Client) FetchOrgMembers(req external_models.ZeduPageRequest) (external_models.ZeduOrgMembersPage, error) {

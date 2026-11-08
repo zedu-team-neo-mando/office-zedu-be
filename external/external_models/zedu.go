@@ -68,6 +68,25 @@ func (r *ZeduMeResponse) UnmarshalJSON(payload []byte) error {
 	return nil
 }
 
+// ZeduProfile is the signed-in user as zedu-be's GET /profile returns them. Its
+// id is the profile's own; the user is user_id.
+type ZeduProfile struct {
+	UserID         string `json:"user_id"`
+	Email          string `json:"email"`
+	Username       string `json:"username"`
+	FullName       string `json:"full_name"`
+	AvatarURL      string `json:"avatar_url"`
+	OrganisationID string `json:"organisation_id"`
+}
+
+type ZeduProfileResponse struct {
+	Data ZeduProfile `json:"data"`
+}
+
+type ZeduOrganisationResponse struct {
+	Data ZeduOrganisation `json:"data"`
+}
+
 type ZeduOrgMember struct {
 	ID            string `json:"id"`
 	Email         string `json:"email"`
